@@ -11,9 +11,11 @@ Real data needs:
 - Outbound access to statsapi.mlb.com (free, no key) for the day's slate
   and probable pitchers, and api.open-meteo.com (free, no key) for wind/
   temperature.
-- A Betstamp API key (BETSTAMP_API_KEY) for real cross-book odds - see
-  odds_monitor/providers/betstamp.py and the main README. Optional: without
-  one, props still get scored, just with no market price/EV% attached.
+- An Odds API key (ODDS_API_KEY) for real cross-book odds - free tier, no
+  card, sign up at the-odds-api.com and see odds_monitor/providers/
+  theoddsapi.py. (A Betstamp key via BETSTAMP_API_KEY also works as an
+  alternative - see odds_monitor/providers/betstamp.py.) Optional: without
+  either, props still get scored, just with no market price/EV% attached.
 
 If this machine can't reach those hosts (some sandboxed environments
 can't), run this via `.github/workflows/mlb-props-report.yml` instead - a
@@ -39,6 +41,7 @@ except ImportError:
 
 from odds_monitor.providers.base import OddsProvider
 from odds_monitor.providers.betstamp import BetstampProvider
+from odds_monitor.providers.theoddsapi import TheOddsApiProvider
 
 from mlb_props.context import LiveParkWeatherProvider, MockParkWeatherProvider, ParkWeatherProvider
 from mlb_props.hot_streak import HotStreakProvider, MockHotStreakProvider, StatcastHotStreakProvider
@@ -90,18 +93,26 @@ def build_providers(args: argparse.Namespace):
     hot_streak = StatcastHotStreakProvider(season_start=date(year, 3, 1))
     park_weather = LiveParkWeatherProvider()
 
-    api_key = args.api_key or os.environ.get("BETSTAMP_API_KEY")
-    if api_key:
-        odds: OddsProvider = BetstampProvider(api_key=api_key, book_ids=args.books)
+    # The Odds API is the default real-odds source (free tier, self-serve
+    # signup, no account approval needed - see odds_monitor/providers/
+    # theoddsapi.py). Betstamp stays available as an alternative for anyone
+    # who already has a key for it. Checked in that order; first one with a
+    # key configured wins.
+    odds_api_key = args.odds_api_key or os.environ.get("ODDS_API_KEY")
+    betstamp_key = args.api_key or os.environ.get("BETSTAMP_API_KEY")
+    if odds_api_key:
+        odds: OddsProvider = TheOddsApiProvider(api_key=odds_api_key, books=args.books)
+    elif betstamp_key:
+        odds = BetstampProvider(api_key=betstamp_key, book_ids=args.books)
     else:
         # Degrade gracefully rather than hard-failing: Statcast/matchup/
         # weather/hot-streak scoring is independently useful even with no
         # odds API key configured yet - props just show model-only rankings
         # (no market price, no EV%) until one is set.
         logger.warning(
-            "No Betstamp API key configured (--api-key or BETSTAMP_API_KEY) - running "
-            "without live odds. Props will show model scores only, with no market price "
-            "or EV%, until a key is set."
+            "No odds API key configured (--odds-api-key/ODDS_API_KEY or --api-key/"
+            "BETSTAMP_API_KEY) - running without live odds. Props will show model scores "
+            "only, with no market price or EV%%, until a key is set."
         )
         odds = NoOddsProvider()
     return schedule, statcast, matchup, hot_streak, park_weather, odds
@@ -133,7 +144,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "run from taking a very long time; raise it for more thorough (but slower) coverage.",
     )
     parser.add_argument("--top", type=int, default=15, help="Max rows to show per section (default: 15).")
-    parser.add_argument("--api-key", default=None, help="Betstamp API key (or set BETSTAMP_API_KEY). Not needed with --mock.")
+    parser.add_argument(
+        "--odds-api-key", default=None, help="The Odds API key (or set ODDS_API_KEY) - free signup at the-odds-api.com. Not needed with --mock."
+    )
+    parser.add_argument("--api-key", default=None, help="Betstamp API key (or set BETSTAMP_API_KEY), used if no Odds API key is configured. Not needed with --mock.")
     parser.add_argument("--books", action="append", default=None, help="Restrict to specific sportsbook IDs (repeatable).")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Logging verbosity.")
     parser.add_argument("--out", default=None, help="Write the console-text report to this file instead of (or in addition to) stdout.")

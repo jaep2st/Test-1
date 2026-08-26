@@ -4,13 +4,15 @@ name: MLB props report
 # GitHub Pages. Runs on a GitHub-hosted runner, which has normal outbound
 # internet access - unlike a sandboxed Claude Code session, it can actually
 # reach baseballsavant.mlb.com, statsapi.mlb.com, api.open-meteo.com, and
-# Betstamp's API. Every run re-fetches everything fresh; nothing is cached
+# The Odds API. Every run re-fetches everything fresh; nothing is cached
 # between runs.
 #
 # Setup (one-time):
 #   1. Settings -> Secrets and variables -> Actions -> New repository secret
-#      -> name it BETSTAMP_API_KEY, value = your Betstamp API key
-#      (https://www.betstamp.com/sports-betting-api).
+#      -> name it ODDS_API_KEY, value = your free API key from
+#      https://the-odds-api.com (no card needed - signup emails you a key
+#      instantly). BETSTAMP_API_KEY also works instead if you have one - see
+#      mlb_props_main.build_providers().
 #   2. Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
 #   3. Run this workflow once manually (Actions tab -> "MLB props report" ->
 #      "Run workflow") to publish the first version; after that the daily
@@ -65,6 +67,7 @@ jobs:
 
       - name: Generate report from live data
         env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
         run: |
           mkdir -p public
