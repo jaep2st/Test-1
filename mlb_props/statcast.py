@@ -111,7 +111,11 @@ class PybaseballStatcastProvider(StatcastProvider):
         self.min_bbe = min_bbe
         self.min_ip = min_ip
         self._batter_cache: Optional["object"] = None
+        self._batter_expected_cache: Optional["object"] = None
         self._pitcher_cache: Optional["object"] = None
+        self._pitcher_expected_cache: Optional["object"] = None
+        self._fg_pitching_cache: Optional["object"] = None
+        self._fg_pitching_failed = False
 
     def _pyb(self):
         try:
@@ -134,11 +138,13 @@ class PybaseballStatcastProvider(StatcastProvider):
         try:
             if self._batter_cache is None:
                 self._batter_cache = pyb.statcast_batter_exitvelo_barrels(self.year, minBBE=self.min_bbe)
-            expected = pyb.statcast_batter_expected_stats(self.year, minPA=self.min_bbe)
+            if self._batter_expected_cache is None:
+                self._batter_expected_cache = pyb.statcast_batter_expected_stats(self.year, minPA=self.min_bbe)
         except Exception:
             logger.exception("Failed to fetch Statcast batter leaderboard for %s", player)
             return None
 
+        expected = self._batter_expected_cache
         df = self._batter_cache
         match = df[df["player_name"].str.lower() == player.strip().lower()]
         if match.empty:
@@ -179,15 +185,18 @@ class PybaseballStatcastProvider(StatcastProvider):
 
     def pitcher_profile(self, player: str) -> Optional[PitcherProfile]:
         pyb = self._pyb()
+        # These two Baseball Savant leaderboards are the essential data for
+        # this profile - if either fails, there's nothing useful to return.
         try:
             if self._pitcher_cache is None:
                 self._pitcher_cache = pyb.statcast_pitcher_exitvelo_barrels(self.year, minBBE=self.min_bbe)
-            expected = pyb.statcast_pitcher_expected_stats(self.year, minPA=self.min_bbe)
-            fg = pyb.pitching_stats(self.year, qual=self.min_ip)
+            if self._pitcher_expected_cache is None:
+                self._pitcher_expected_cache = pyb.statcast_pitcher_expected_stats(self.year, minPA=self.min_bbe)
         except Exception:
             logger.exception("Failed to fetch Statcast pitcher leaderboard for %s", player)
             return None
 
+        expected = self._pitcher_expected_cache
         df = self._pitcher_cache
         match = df[df["player_name"].str.lower() == player.strip().lower()]
         if match.empty:
@@ -203,14 +212,24 @@ class PybaseballStatcastProvider(StatcastProvider):
         except Exception:
             logger.debug("No expected-stats row for %r", player)
 
+        # HR/9 comes from FanGraphs, a separate (and less reliable - it's
+        # blocked outright from some hosting providers, e.g. GitHub Actions
+        # runners have hit 403s scraping it) source than Baseball Savant.
+        # Isolated on purpose: a FanGraphs failure should cost us HR/9
+        # (defaults to 0.0, i.e. neutral in the pitcher_allowed component),
+        # not the entire Statcast-sourced profile above.
         hr9 = 0.0
-        try:
-            fg_match = fg[fg["Name"].str.lower() == player.strip().lower()]
-            if not fg_match.empty:
-                fg_row = fg_match.iloc[0].to_dict()
-                hr9 = float(fg_row.get("HR/9", 0.0) or 0.0)
-        except Exception:
-            logger.debug("No FanGraphs pitching row for %r", player)
+        if not self._fg_pitching_failed:
+            try:
+                if self._fg_pitching_cache is None:
+                    self._fg_pitching_cache = pyb.pitching_stats(self.year, qual=self.min_ip)
+                fg_match = self._fg_pitching_cache[self._fg_pitching_cache["Name"].str.lower() == player.strip().lower()]
+                if not fg_match.empty:
+                    fg_row = fg_match.iloc[0].to_dict()
+                    hr9 = float(fg_row.get("HR/9", 0.0) or 0.0)
+            except Exception:
+                logger.warning("FanGraphs pitching_stats fetch failed - HR/9 defaulting to 0.0 for all pitchers", exc_info=True)
+                self._fg_pitching_failed = True
 
         try:
             return PitcherProfile(

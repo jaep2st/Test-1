@@ -28,10 +28,13 @@ class ProbableMatchup:
     away_pitcher: Optional[str]
     home_pitcher: Optional[str]
     game_time_utc: Optional[str] = None
-    # Best-effort expected lineup regulars; MLB Stats API only posts actual
-    # lineups shortly before first pitch, so this is often empty well ahead
-    # of game time - callers should let the user supply their own roster in
-    # that case (see cli --batters).
+    # MLB Stats API only posts the actual starting lineup shortly before
+    # first pitch, so well ahead of game time these are populated from each
+    # team's active roster instead (all non-pitchers currently on the
+    # 26-man active roster) - a reasonable stand-in for "who might play"
+    # that's available any time of day, at the cost of including bench
+    # players alongside the starters. Callers can still override with their
+    # own list via cli --batters.
     away_batters: List[str] = field(default_factory=list)
     home_batters: List[str] = field(default_factory=list)
 
@@ -48,11 +51,19 @@ class MlbStatsApiScheduleProvider(ScheduleProvider):
     shape with `--log-level DEBUG` before relying on it.
     """
 
-    def __init__(self, session=None, timeout: float = 10.0):
+    def __init__(self, session=None, timeout: float = 10.0, include_rosters: bool = True, max_batters_per_team: int = 9):
         import requests
 
         self.session = session or requests.Session()
         self.timeout = timeout
+        self.include_rosters = include_rosters
+        # The roster endpoint doesn't indicate batting order or who's
+        # actually starting today, so this is a size cap for speed (each
+        # batter costs several downstream API calls across the pipeline),
+        # not a "starters" filter - 9 approximates a lineup's worth without
+        # scoring an entire ~13-man position-player bench every run.
+        self.max_batters_per_team = max_batters_per_team
+        self._roster_cache: dict = {}
 
     def get_slate(self, game_date: date) -> List[ProbableMatchup]:
         try:
@@ -76,6 +87,8 @@ class MlbStatsApiScheduleProvider(ScheduleProvider):
             for game in date_block.get("games", []):
                 try:
                     teams = game["teams"]
+                    away_team_id = teams["away"]["team"]["id"]
+                    home_team_id = teams["home"]["team"]["id"]
                     away = teams["away"]["team"]["name"]
                     home = teams["home"]["team"]["name"]
                     venue = game.get("venue", {}).get("name", "")
@@ -89,11 +102,46 @@ class MlbStatsApiScheduleProvider(ScheduleProvider):
                             away_pitcher=away_pitcher,
                             home_pitcher=home_pitcher,
                             game_time_utc=game.get("gameDate"),
+                            away_batters=self._active_position_players(away_team_id)[: self.max_batters_per_team]
+                            if self.include_rosters
+                            else [],
+                            home_batters=self._active_position_players(home_team_id)[: self.max_batters_per_team]
+                            if self.include_rosters
+                            else [],
                         )
                     )
                 except (KeyError, TypeError):
                     logger.warning("Skipping unparsable schedule entry: %r", game)
         return matchups
+
+    def _active_position_players(self, team_id: int) -> List[str]:
+        """All non-pitchers on a team's active (26-man) roster right now."""
+        if team_id in self._roster_cache:
+            return self._roster_cache[team_id]
+        try:
+            resp = self.session.get(
+                f"{MLB_STATS_API_BASE}/teams/{team_id}/roster",
+                params={"rosterType": "active"},
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            entries = resp.json().get("roster", [])
+        except Exception:
+            logger.exception("MLB Stats API roster fetch failed for team_id=%s", team_id)
+            self._roster_cache[team_id] = []
+            return []
+
+        players = []
+        for entry in entries:
+            try:
+                position_type = entry.get("position", {}).get("type", "")
+                if position_type == "Pitcher":
+                    continue
+                players.append(entry["person"]["fullName"])
+            except (KeyError, TypeError):
+                logger.warning("Skipping unparsable roster entry: %r", entry)
+        self._roster_cache[team_id] = players
+        return players
 
 
 class MockScheduleProvider(ScheduleProvider):
