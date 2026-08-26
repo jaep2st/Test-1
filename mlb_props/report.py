@@ -55,9 +55,13 @@ def render_hot_batters(hot_batters: List, top: int = 10) -> str:
 
 def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int) -> str:
     lines = [f"## {title}", ""]
+    if not edges:
+        lines.append("(no candidates)")
+        return "\n".join(lines)
+
     priced = [e for e in edges if e.has_market_data]
     if not priced:
-        lines.append("(no market prices matched - showing model-only ranking below)" if edges else "(no candidates)")
+        lines.append("(no market prices matched - showing model-only ranking below)")
         for e in edges[:top]:
             lines.append(f"  - {e.player} ({e.event}): model score {e.model_score:.0f}/100, est. {_fmt_pct(e.model_prob)}")
         return "\n".join(lines)
@@ -81,6 +85,20 @@ def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int) -> str:
             f"{_fmt_opt_pct(e.market_fair_prob):>8} {_fmt_opt_signed_pct(e.edge_vs_market):>7} "
             f"{e.ev_percent_model:>+7.1f}% {ev_market:>8} {e.books_quoting:>4} {weather:<22}"
         )
+
+    # Real market prices only cover whichever candidates a book happens to
+    # quote (confirmed live: some events, some players - never all of
+    # them). Priced rows above are the highest-value info, but the rest of
+    # the field shouldn't just vanish from the report because one other
+    # player had a price - backfill remaining slots with model-only rows
+    # so this table still surfaces the top candidates overall, priced or not.
+    remaining = top - len(priced[:top])
+    unpriced = [e for e in edges if not e.has_market_data][:remaining]
+    if unpriced:
+        lines.append("")
+        lines.append(f"(model-only - no book currently quotes these {len(unpriced)} candidates)")
+        for e in unpriced:
+            lines.append(f"  - {e.player} ({e.event}): model score {e.model_score:.0f}/100, est. {_fmt_pct(e.model_prob)}")
     return "\n".join(lines)
 
 
