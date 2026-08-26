@@ -12,10 +12,11 @@ def test_mlb_props_cli_mock_runs_without_error(capsys):
 
 
 def test_mlb_props_cli_missing_api_key_degrades_gracefully(monkeypatch, caplog):
-    # Without a Betstamp key and without --mock, real providers are built
+    # Without any odds API key and without --mock, real providers are built
     # (they need real network access to do anything, which isn't available
     # in a test), so this exercises that construction doesn't raise and that
     # the missing-key path is a warning, not a hard failure.
+    monkeypatch.delenv("ODDS_API_KEY", raising=False)
     monkeypatch.delenv("BETSTAMP_API_KEY", raising=False)
     from mlb_props_main import build_providers, parse_args
 

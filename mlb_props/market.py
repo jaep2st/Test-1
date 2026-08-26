@@ -1,14 +1,20 @@
 """MLB home run and total-bases prop markets: constants, plus a mock odds
 provider so the whole pipeline is demoable with `--mock` and no API key.
 
-Real odds reuse `odds_monitor.providers.betstamp.BetstampProvider` -
-`fetch_player_props("mlb")` - which pulls whatever `bet_types=player_props`
-markets Betstamp returns for MLB and hands back `PropLine`s. This module
-only defines the market-name constants used to filter those down to home
-run and total-bases props specifically; Betstamp's exact market-name string
-for each wasn't verified live (see `odds_monitor/providers/betstamp.py`),
-so `MARKET_HOME_RUN`/`MARKET_TOTAL_BASES` may need adjusting to match your
-account's real field values (check with `--log-level DEBUG`).
+Real odds default to `odds_monitor.providers.theoddsapi.TheOddsApiProvider`
+(needs `ODDS_API_KEY` - free tier, no card, sign up at the-odds-api.com) -
+`fetch_player_props("mlb")` pulls real cross-book player-prop odds and hands
+back `PropLine`s. `MARKET_HOME_RUN`/`MARKET_TOTAL_BASES` below are set to
+The Odds API's own real, documented market keys
+(https://the-odds-api.com/sports-odds-data/betting-markets.html), so no
+translation is needed between this module and that provider.
+
+`odds_monitor.providers.betstamp.BetstampProvider` (needs
+`BETSTAMP_API_KEY`) is also still available as an alternative - see
+`mlb_props_main.build_providers()` for which one gets picked. Betstamp's
+exact market-name string for each prop wasn't verified live (see that
+provider's docstring), so these constants may not match its real field
+values if you use it instead of The Odds API.
 """
 
 from __future__ import annotations
@@ -18,8 +24,8 @@ from typing import List, Optional
 from odds_monitor.models import PropLine
 from odds_monitor.providers.base import OddsProvider
 
-MARKET_HOME_RUN = "player_home_runs"  # two-way: "yes" / "no", to hit a home run
-MARKET_TOTAL_BASES = "player_total_bases"  # two-way: "over" / "under" a line (2+ bases = line 1.5)
+MARKET_HOME_RUN = "batter_home_runs"  # two-way: "yes" / "no", to hit a home run
+MARKET_TOTAL_BASES = "batter_total_bases"  # two-way: "over" / "under" a line (2+ bases = line 1.5)
 TOTAL_BASES_LINE_FOR_2PLUS = 1.5
 
 _BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "espnbet", "fanatics"]

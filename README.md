@@ -44,11 +44,11 @@ Real mode needs several free-but-separate data sources wired together:
 | Platoon splits, batter-vs-pitcher history, pitch-mix fit | Statcast pitch logs, via `pybaseball` | No |
 | Recent form (last 7/15/30 days) | Baseball Savant pitch logs, via `pybaseball` | No |
 | Ballpark factors + live wind/temperature | Static table + Open-Meteo | No |
-| Cross-book player-prop odds | Betstamp Sports Betting API | Yes (props run model-only without it) |
+| Cross-book player-prop odds | The Odds API (free tier, self-serve key) | Yes (props run model-only without it) |
 
 ```bash
 pip install pybaseball pandas   # only needed for real (non --mock) Statcast/matchup/form data
-cp .env.example .env            # fill in BETSTAMP_API_KEY (optional - see below)
+cp .env.example .env            # fill in ODDS_API_KEY (optional - see below)
 python mlb_props_main.py --date today --min-ev 2 --html-out report.html
 ```
 
@@ -59,11 +59,17 @@ the recommended way to run this for real, on every run, with zero local
 setup** - a GitHub-hosted runner has that access by default. Running it
 locally or in CI both work the same way; pick whichever you'll actually use.
 
-No `BETSTAMP_API_KEY`? The pipeline still runs - `NoOddsProvider` returns no
-lines and every prop shows a model score with no market price or EV%
-(`odds_monitor.ev` only produces EV% when there are books to compare against).
-Statcast/matchup/weather/hot-streak scoring is independently useful, so this
-degrades gracefully instead of failing.
+No `ODDS_API_KEY` (and no `BETSTAMP_API_KEY` either)? The pipeline still
+runs - `NoOddsProvider` returns no lines and every prop shows a model score
+with no market price or EV% (`odds_monitor.ev` only produces EV% when there
+are books to compare against). Statcast/matchup/weather/hot-streak scoring
+is independently useful, so this degrades gracefully instead of failing.
+
+**Getting an odds API key:** [the-odds-api.com](https://the-odds-api.com) -
+click "Get API Key", enter an email, done. Free tier (500 credits/month), no
+card required. `odds_monitor/providers/theoddsapi.py` is the client;
+`ODDS_API_KEY` is checked before `BETSTAMP_API_KEY`, so set whichever one you
+have (both work, The Odds API is just easier to sign up for).
 
 Real lineups aren't posted by MLB until close to first pitch, so well
 ahead of game time you'll likely want to pass specific hitters explicitly:
@@ -79,7 +85,8 @@ field names occasionally drift from a library/API's docs. The first time
 you run for real (locally or via the workflow, with `--log-level DEBUG`),
 check the logs for parse warnings and adjust the alias dicts in
 `mlb_props/statcast.py`, `mlb_props/matchup.py`, `mlb_props/hot_streak.py`,
-and `odds_monitor/providers/betstamp.py` if needed.
+and `odds_monitor/providers/theoddsapi.py` (or `betstamp.py`, if using that
+instead) if needed.
 
 ### Always-current live report via GitHub Actions + Pages
 
@@ -92,9 +99,10 @@ the published page always reflects that run's live fetch.
 One-time setup:
 
 1. **Settings -> Secrets and variables -> Actions -> New repository
-   secret** -> name it `BETSTAMP_API_KEY` -> paste your key from
-   https://www.betstamp.com/sports-betting-api. (Skip this to publish a
-   model-only report with no odds/EV columns.)
+   secret** -> name it `ODDS_API_KEY` -> paste your free key from
+   https://the-odds-api.com. (Skip this to publish a model-only report with
+   no odds/EV columns. A `BETSTAMP_API_KEY` secret works too, as an
+   alternative.)
 2. **Settings -> Pages -> Build and deployment -> Source: "GitHub
    Actions"**.
 3. **Actions tab -> "MLB props report" -> Run workflow** to publish the
@@ -137,7 +145,8 @@ you can judge how much to trust the edge yourself.
 | `--batters` | none | Extra batter name to include (repeatable) - useful before lineups post |
 | `--min-ev` | `0` | Minimum EV% (by our model) required to show a prop |
 | `--top` | `15` | Max rows per section |
-| `--api-key` | `$BETSTAMP_API_KEY` | Betstamp API key (omit for a model-only report, no odds) |
+| `--odds-api-key` | `$ODDS_API_KEY` | The Odds API key, checked first (omit both this and `--api-key` for a model-only report, no odds) |
+| `--api-key` | `$BETSTAMP_API_KEY` | Betstamp API key, used if no Odds API key is set |
 | `--books` | all | Restrict to specific sportsbook IDs (repeatable) |
 | `--out` | none | Also write the console-text report to this file |
 | `--html-out` | none | Also write the styled HTML report to this file |
@@ -245,7 +254,8 @@ odds_monitor/
   detector.py              groups lines and flags >= min-spread gaps
   providers/
     base.py                 OddsProvider interface
-    betstamp.py              real Betstamp API client
+    theoddsapi.py            real The Odds API client (mlb_props default)
+    betstamp.py              real Betstamp API client (alternative)
     mock.py                  synthetic data, no API key needed
   notifiers/
     base.py                 Notifier interface
