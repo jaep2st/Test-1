@@ -138,6 +138,10 @@ def _fmt_pct(x: float) -> str:
     return f"{x * 100:.1f}%"
 
 
+def _fmt_opt_pct(x) -> str:
+    return _fmt_pct(x) if x is not None else "n/a"
+
+
 def _wind_chip(env: MatchupEnvironment) -> str:
     if env.matchup.venue and env.weather_boost_pct == 0.0 and env.away_pitcher_vulnerability is None:
         pass  # not used - dome detection handled by weather_boost_pct alone isn't reliable; keep chip generic below
@@ -183,9 +187,19 @@ def _prop_row(e: EdgeCandidate) -> str:
             <td class="event">{_esc(e.event)}</td><td class="num">{_fmt_pct(e.model_prob)}</td>
             <td colspan="7" class="wx-cell">no book currently quotes this prop</td></tr>"""
     both_agree = e.ev_percent_model is not None and e.ev_percent_model > 0 and e.edge_vs_market is not None and e.edge_vs_market > 0
-    tier = '<div class="tier agree">Model + market agree</div>' if both_agree else '<div class="tier model">Model only</div>'
+    if both_agree:
+        tier = '<div class="tier agree">Model + market agree</div>'
+    elif e.market_fair_prob is None:
+        # Real price, but a single-sided market (e.g. an "Over 0.5"-only home
+        # run prop with no "Under" leg) - no no-vig consensus to compare
+        # against, so this is model-vs-price EV only. See edges.py.
+        tier = '<div class="tier model">Model only &mdash; single-sided market, no no-vig consensus</div>'
+    else:
+        tier = '<div class="tier model">Model only</div>'
     wind = "dome" if e.is_dome else f"{abs(e.wind_out_mph):.0f}mph {'out' if e.wind_out_mph > 0 else 'in' if e.wind_out_mph < 0 else 'calm'}"
     temp = f"{e.temp_f:.0f}°F" if e.temp_f is not None else "n/a"
+    edge_cell = f"{e.edge_vs_market:+.1%}" if e.edge_vs_market is not None else "n/a"
+    ev_market_cell = f"{e.ev_percent_market:+.1f}%" if e.ev_percent_market is not None else "n/a"
     return f"""
           <tr>
             <td class="player">{_esc(e.player)}{tier}</td>
@@ -193,10 +207,10 @@ def _prop_row(e: EdgeCandidate) -> str:
             <td class="num">{_fmt_pct(e.model_prob)}</td>
             <td class="num pos">{e.best_line.odds:+d}</td>
             <td class="book">{_esc(e.best_line.sportsbook)}</td>
-            <td class="num">{_fmt_pct(e.market_fair_prob)}</td>
-            <td class="num {'pos' if e.edge_vs_market >= 0 else 'neg'}">{e.edge_vs_market:+.1%}</td>
+            <td class="num">{_fmt_opt_pct(e.market_fair_prob)}</td>
+            <td class="num {'pos' if e.edge_vs_market is not None and e.edge_vs_market >= 0 else 'neg' if e.edge_vs_market is not None else ''}">{edge_cell}</td>
             <td class="num {'pos' if e.ev_percent_model >= 0 else 'neg'}">{e.ev_percent_model:+.1f}%</td>
-            <td class="num {'pos' if e.ev_percent_market >= 0 else 'neg'}">{e.ev_percent_market:+.1f}%</td>
+            <td class="num {'pos' if e.ev_percent_market is not None and e.ev_percent_market >= 0 else 'neg' if e.ev_percent_market is not None else ''}">{ev_market_cell}</td>
             <td class="num">{e.books_quoting}</td>
             <td class="wx-cell">{wind}, {temp} <b>{e.weather_boost_pct:+.1f}%</b></td>
           </tr>"""
@@ -249,13 +263,17 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     def tile(label: str, value: str, sub: str) -> str:
         return f'<div class="tile"><div class="label">{_esc(label)}</div><div class="value">{_esc(value)}</div><div class="sub">{sub}</div></div>'
 
+    def _top_tile_sub(top) -> str:
+        if not top.has_market_data:
+            return f"model {_fmt_pct(top.model_prob)} &middot; no market price"
+        vs_market = f" vs market <b>{_fmt_pct(top.market_fair_prob)}</b>" if top.market_fair_prob is not None else " (single-sided market, no no-vig consensus)"
+        return f"model <b>{_fmt_pct(top.model_prob)}</b>{vs_market} &middot; <span class=\"num pos\">{top.best_line.odds:+d}</span> {_esc(top.best_line.sportsbook)}"
+
     tiles = []
     if top_hr:
-        sub = f"model <b>{_fmt_pct(top_hr.model_prob)}</b> vs market <b>{_fmt_pct(top_hr.market_fair_prob)}</b> &middot; <span class=\"num pos\">{top_hr.best_line.odds:+d}</span> {_esc(top_hr.best_line.sportsbook)}" if top_hr.has_market_data else f"model {_fmt_pct(top_hr.model_prob)} &middot; no market price"
-        tiles.append(tile("Top HR Prop", top_hr.player, sub))
+        tiles.append(tile("Top HR Prop", top_hr.player, _top_tile_sub(top_hr)))
     if top_tb:
-        sub = f"model <b>{_fmt_pct(top_tb.model_prob)}</b> vs market <b>{_fmt_pct(top_tb.market_fair_prob)}</b> &middot; <span class=\"num pos\">{top_tb.best_line.odds:+d}</span> {_esc(top_tb.best_line.sportsbook)}" if top_tb.has_market_data else f"model {_fmt_pct(top_tb.model_prob)} &middot; no market price"
-        tiles.append(tile("Top 2+ TB Prop", top_tb.player, sub))
+        tiles.append(tile("Top 2+ TB Prop", top_tb.player, _top_tile_sub(top_tb)))
     if best_env:
         m = best_env.matchup
         tiles.append(tile("Best HR Environment", m.venue, f"{_esc(m.away_team)} @ {_esc(m.home_team)} &middot; env score <b>{best_env.environment_score:.1f}</b>/100"))

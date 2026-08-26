@@ -264,8 +264,8 @@ def run_pipeline(
         odds_lines = []
     fair_prices = find_fair_prices(odds_lines)
 
-    hr_edges = rank_candidates(build_hr_edges(hr_scores, fair_prices, event_lookup), min_ev_percent)
-    tb_edges = rank_candidates(build_total_bases_edges(tb_scores, fair_prices, event_lookup), min_ev_percent)
+    hr_edges = rank_candidates(build_hr_edges(hr_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
+    tb_edges = rank_candidates(build_total_bases_edges(tb_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
 
     heat_indices.sort(key=lambda h: h.z_score, reverse=True)
 

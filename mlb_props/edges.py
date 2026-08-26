@@ -1,17 +1,30 @@
 """Combine our composite model scores with the market's own no-vig
 consensus (from `odds_monitor.ev`) into ranked +EV candidates.
 
-Two independent signals feed every candidate:
+Two independent signals feed every candidate, when the market allows it:
 1. **Model edge** - our HR/total-bases score says this player's probability
    is higher than what the best available price pays out for (EV computed
-   against our own `model_prob`).
+   against our own `model_prob`). This only needs one real price, so it
+   works even for a single-sided market (see below).
 2. **Market edge** - regardless of our model, one book's price is
    meaningfully better than the cross-book no-vig consensus (classic line
-   shopping / +EV, computed by `odds_monitor.ev.find_fair_prices`).
+   shopping / +EV, computed by `odds_monitor.ev.find_fair_prices`). This
+   needs a genuinely two-sided market (both "yes"/"no" or "over"/"under"
+   quoted by at least one book) to de-vig - see that function's docstring.
 
 A candidate flagged by both is the strongest kind of spot: our fundamentals
 say the market's consensus is underpricing it, *and* there's a specific book
 offering a price better than that consensus.
+
+**Single-sided markets:** confirmed live (see `odds_monitor/providers/
+theoddsapi.py`'s home-run-market diagnostics) that at least one real book
+quotes MLB's home-run prop as "Over 0.5" only, with no "Under" leg at all -
+a common shape for "anytime" props. `find_fair_prices` can't de-vig that (it
+needs two sides), so those real prices would otherwise never appear despite
+being genuine, live market data. `_build_edges` falls back to the best
+available single-sided price when no de-vigged `FairPrice` match exists,
+computing model-vs-price EV only (market-edge fields stay `None` - there's
+no no-vig consensus to compare against without a second side).
 """
 
 from __future__ import annotations
@@ -19,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from odds_monitor.ev import FairPrice, model_ev_percent
+from odds_monitor.ev import FairPrice, american_to_decimal, model_ev_percent
 from odds_monitor.models import PropLine
 
 from .market import MARKET_HOME_RUN, MARKET_TOTAL_BASES
@@ -82,16 +95,40 @@ def _fair_price_lookup(fair_prices: List[FairPrice], market: str, side: str) -> 
     }
 
 
+def _single_sided_lookup(lines: List[PropLine], market: str, side: str) -> Dict[str, "tuple[PropLine, int]"]:
+    """Best real price per player for a market/side that `find_fair_prices`
+    couldn't de-vig (no second side quoted anywhere) - see this module's
+    docstring. Maps lowercased player name -> (best line, distinct books
+    quoting that side). `None`-odds lines are ignored, same as
+    `find_fair_prices`.
+    """
+    by_player: Dict[str, List[PropLine]] = {}
+    for line in lines:
+        if (
+            line.odds is not None
+            and line.market.lower() == market.lower()
+            and line.side.lower() == side.lower()
+        ):
+            by_player.setdefault(line.player.strip().lower(), []).append(line)
+    return {
+        player: (max(group, key=lambda l: american_to_decimal(l.odds)), len({l.sportsbook for l in group}))
+        for player, group in by_player.items()
+    }
+
+
 def _build_edges(
-    scores: List, market: str, side: str, fair_prices: List[FairPrice], event_lookup: Dict[str, str]
+    scores: List, market: str, side: str, fair_prices: List[FairPrice], lines: List[PropLine], event_lookup: Dict[str, str]
 ) -> List[EdgeCandidate]:
     lookup = _fair_price_lookup(fair_prices, market, side)
+    single_sided = _single_sided_lookup(lines, market, side)
     candidates: List[EdgeCandidate] = []
     for result in scores:
         key = result.player.strip().lower()
         fp = lookup.get(key)
-        event = event_lookup.get(result.player, fp.event if fp else "")
         if fp is None:
+            single = single_sided.get(key)
+            best_line, books = single if single else (None, 0)
+            event = event_lookup.get(result.player, best_line.event if best_line else "")
             candidates.append(
                 EdgeCandidate(
                     player=result.player,
@@ -100,12 +137,12 @@ def _build_edges(
                     model_score=result.score,
                     model_prob=result.model_prob,
                     market_fair_prob=None,
-                    best_line=None,
-                    ev_percent_model=None,
+                    best_line=best_line,
+                    ev_percent_model=round(model_ev_percent(result.model_prob, best_line.odds), 1) if best_line else None,
                     ev_percent_market=None,
                     edge_vs_market=None,
                     price_spread_percent=None,
-                    books_quoting=0,
+                    books_quoting=books,
                     park=result.park,
                     wind_out_mph=result.wind_out_mph,
                     temp_f=result.temp_f,
@@ -114,6 +151,7 @@ def _build_edges(
                 )
             )
             continue
+        event = event_lookup.get(result.player, fp.event)
         candidates.append(
             EdgeCandidate(
                 player=result.player,
@@ -139,15 +177,15 @@ def _build_edges(
 
 
 def build_hr_edges(
-    scores: List[HRScoreResult], fair_prices: List[FairPrice], event_lookup: Dict[str, str]
+    scores: List[HRScoreResult], fair_prices: List[FairPrice], lines: List[PropLine], event_lookup: Dict[str, str]
 ) -> List[EdgeCandidate]:
-    return _build_edges(scores, MARKET_HOME_RUN, "yes", fair_prices, event_lookup)
+    return _build_edges(scores, MARKET_HOME_RUN, "yes", fair_prices, lines, event_lookup)
 
 
 def build_total_bases_edges(
-    scores: List[TotalBasesScoreResult], fair_prices: List[FairPrice], event_lookup: Dict[str, str]
+    scores: List[TotalBasesScoreResult], fair_prices: List[FairPrice], lines: List[PropLine], event_lookup: Dict[str, str]
 ) -> List[EdgeCandidate]:
-    return _build_edges(scores, MARKET_TOTAL_BASES, "over", fair_prices, event_lookup)
+    return _build_edges(scores, MARKET_TOTAL_BASES, "over", fair_prices, lines, event_lookup)
 
 
 def rank_candidates(candidates: List[EdgeCandidate], min_ev_percent: float = 0.0) -> List[EdgeCandidate]:
