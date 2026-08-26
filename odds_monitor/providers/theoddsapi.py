@@ -138,12 +138,22 @@ class TheOddsApiProvider(OddsProvider):
 
     def _parse_event_odds(self, payload: Dict[str, Any], league: str, event_label: str) -> List[PropLine]:
         lines: List[PropLine] = []
-        for bookmaker in (payload or {}).get("bookmakers", []) or []:
+        bookmakers = (payload or {}).get("bookmakers", []) or []
+        if not bookmakers:
+            logger.debug("%s: no bookmakers in response yet (empty bookmakers list)", event_label)
+        for bookmaker in bookmakers:
             book_key = str(bookmaker.get("key", "")).lower()
             if self.books and book_key not in self.books:
                 continue
             for market in bookmaker.get("markets", []) or []:
                 market_key = market.get("key")
+                logger.debug(
+                    "%s: bookmaker %s carries market %r with %d outcome(s)",
+                    event_label,
+                    book_key,
+                    market_key,
+                    len(market.get("outcomes", []) or []),
+                )
                 if market_key == MARKET_KEY_HOME_RUN:
                     side_aliases, our_market, default_line = _HR_SIDE_ALIASES, MARKET_KEY_HOME_RUN, _DEFAULT_HR_LINE
                 elif market_key == MARKET_KEY_TOTAL_BASES:
