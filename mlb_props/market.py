@@ -25,6 +25,17 @@ TOTAL_BASES_LINE_FOR_2PLUS = 1.5
 _BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "espnbet", "fanatics"]
 
 
+class NoOddsProvider(OddsProvider):
+    """Returns no lines at all. Used when no odds API key is configured, so
+    the rest of the pipeline (Statcast, matchup, weather, hot-streak scoring)
+    still runs and produces model-only rankings instead of hard-failing -
+    every `EdgeCandidate` just comes back with `has_market_data=False`.
+    """
+
+    def fetch_player_props(self, league: str) -> List[PropLine]:
+        return []
+
+
 class MockMlbPropsOddsProvider(OddsProvider):
     """Synthetic HR/total-bases prop odds for a given list of batters - no
     network calls, no API key. Randomizes each book's price around a

@@ -1,0 +1,91 @@
+name: MLB props report
+
+# Regenerates the Longball Board report from live data and publishes it to
+# GitHub Pages. Runs on a GitHub-hosted runner, which has normal outbound
+# internet access - unlike a sandboxed Claude Code session, it can actually
+# reach baseballsavant.mlb.com, statsapi.mlb.com, api.open-meteo.com, and
+# Betstamp's API. Every run re-fetches everything fresh; nothing is cached
+# between runs.
+#
+# Setup (one-time):
+#   1. Settings -> Secrets and variables -> Actions -> New repository secret
+#      -> name it BETSTAMP_API_KEY, value = your Betstamp API key
+#      (https://www.betstamp.com/sports-betting-api).
+#   2. Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+#   3. Run this workflow once manually (Actions tab -> "MLB props report" ->
+#      "Run workflow") to publish the first version; after that the daily
+#      schedule below keeps it current. The schedule only fires once this
+#      file is on the repo's default branch - trigger it manually from a
+#      feature branch in the meantime.
+#
+# The published page always reflects the most recent successful run - open
+# it any time for the current slate, or click "Run workflow" for an
+# on-demand refresh.
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Slate date (YYYY-MM-DD), or 'today'"
+        required: false
+        default: "today"
+      min_ev:
+        description: "Minimum model EV%% required to show a prop"
+        required: false
+        default: "0"
+  schedule:
+    # 15:00 UTC daily (~11am ET / 8am PT) - after probable pitchers are
+    # typically posted, well before first pitch. Adjust to taste.
+    - cron: "0 15 * * *"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pybaseball pandas
+
+      - name: Generate report from live data
+        env:
+          BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
+        run: |
+          mkdir -p public
+          python mlb_props_main.py \
+            --date "${{ inputs.date || 'today' }}" \
+            --min-ev "${{ inputs.min_ev || '0' }}" \
+            --top 25 \
+            --html-out public/index.html \
+            --out public/report.txt \
+            --log-level DEBUG
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
