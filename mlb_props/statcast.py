@@ -127,26 +127,34 @@ class PybaseballStatcastProvider(StatcastProvider):
     `pybaseball`. Requires `pip install pybaseball pandas` and outbound
     network access to `baseballsavant.mlb.com`.
 
-    NOTE: this provider was written against pybaseball's documented public
-    functions (`statcast_batter_exitvelo_barrels`,
-    `statcast_pitcher_exitvelo_barrels`, `statcast_batter_expected_stats`,
-    `statcast_pitcher_expected_stats`, `pitching_stats`,
-    `playerid_lookup`), but a live pull against Baseball Savant was not
-    possible from the environment this was built in (outbound access to
-    `baseballsavant.mlb.com` was blocked there). Before relying on it,
-    run once with `--log-level DEBUG`, inspect the DataFrame column names
-    for your installed pybaseball version, and adjust `_COLUMN_ALIASES`
-    below if they've changed.
+    Column names below were confirmed against a live Baseball Savant pull
+    (via `--log-level DEBUG`'s "Matching ... against columns" lines from a
+    real run): `statcast_*_exitvelo_barrels(year)` returns
+    `['last_name, first_name', 'player_id', 'attempts', 'avg_hit_angle',
+    'anglesweetspotpercent', 'max_hit_speed', 'avg_hit_speed', 'ev50',
+    'fbld', 'gb', 'max_distance', 'avg_distance', 'avg_hr_distance',
+    'ev95plus', 'ev95percent', 'barrels', 'brl_percent', 'brl_pa']` - no
+    team, bats/throws, PA/AB/HR, pull%, or HR/FB% columns at all, so those
+    fields fall back to their defaults regardless of aliasing.
+    `statcast_*_expected_stats(year)` returns `['last_name, first_name',
+    'player_id', 'year', 'pa', 'bip', 'ba', 'est_ba',
+    'est_ba_minus_ba_diff', 'slg', 'est_slg', 'est_slg_minus_slg_diff',
+    'woba', 'est_woba', 'est_woba_minus_woba_diff', 'era', 'xera',
+    'era_minus_xera_diff']` - no `iso` column; computed from `slg`/`ba`
+    below instead. If a future pybaseball/Savant version changes these,
+    the same debug log line will show the new columns.
     """
 
     _COLUMN_ALIASES: Dict[str, tuple] = {
         "barrel_pct": ("brl_percent", "barrel_batted_rate"),
-        "hard_hit_pct": ("hard_hit_percent",),
+        "hard_hit_pct": ("ev95percent", "hard_hit_percent"),
         "avg_exit_velo": ("avg_hit_speed", "exit_velocity_avg"),
         "avg_launch_angle": ("avg_hit_angle", "launch_angle_avg"),
-        "sweet_spot_pct": ("sweet_spot_percent",),
-        "xwoba": ("xwoba",),
-        "xslg": ("xslg",),
+        "sweet_spot_pct": ("anglesweetspotpercent", "sweet_spot_percent"),
+        "xwoba": ("est_woba", "xwoba"),
+        "xslg": ("est_slg", "xslg"),
+        "actual_slg": ("slg",),
+        "actual_ba": ("ba",),
         "pitch_mix": ("pitch_type", "pitch_usage"),
     }
 
@@ -162,6 +170,7 @@ class PybaseballStatcastProvider(StatcastProvider):
         self._fg_pitching_failed = False
         self._id_cache: Dict[str, Optional[int]] = {}
         self._pitch_mix_cache: Dict[str, Dict[str, float]] = {}
+        self._throws_cache: Dict[str, Optional[str]] = {}
         # A team's ~9 roster batters all share the same 1-2 probable
         # pitchers, so without memoizing by name, pitcher_profile() (now a
         # non-trivial fetch, with the pitch-mix lookup below) would redo
@@ -183,6 +192,18 @@ class PybaseballStatcastProvider(StatcastProvider):
             if col in row and row[col] is not None:
                 return row[col]
         return None
+
+    def _iso(self, row: Dict) -> float:
+        """ISO = SLG - AVG. Not a column Baseball Savant's expected-stats
+        leaderboard provides directly (confirmed live - see
+        _COLUMN_ALIASES' docstring note) - computed from actual SLG/BA
+        instead, both of which are.
+        """
+        slg = self._pick(row, "actual_slg")
+        ba = self._pick(row, "actual_ba")
+        if slg is None or ba is None:
+            return 0.0
+        return float(slg) - float(ba)
 
     def batter_profile(self, player: str) -> Optional[BatterProfile]:
         pyb = self._pyb()
@@ -221,9 +242,17 @@ class PybaseballStatcastProvider(StatcastProvider):
                 avg_exit_velo=float(self._pick(row, "avg_exit_velo") or 0.0),
                 avg_launch_angle=float(self._pick(row, "avg_launch_angle") or 0.0),
                 sweet_spot_pct=float(self._pick(row, "sweet_spot_pct") or 0.0),
+                # pull_air_pct and hr_fb_pct default to 0.0 (confirmed live):
+                # neither Baseball Savant leaderboard used here carries a
+                # pull% or HR/FB% column - those are normally FanGraphs
+                # fields (Pull%, HR/FB), and FanGraphs is the source that's
+                # blocked from GitHub Actions (see hot_streak.py's
+                # StatcastHotStreakProvider docstring). Their weight in the
+                # HR score (6% + 12%) is a known accuracy gap until a
+                # working source for them is wired up.
                 pull_air_pct=float(row.get("pull_percent", 0.0) or 0.0),
                 hr_fb_pct=float(row.get("hr_fb_ratio", row.get("hr_fb", 0.0)) or 0.0),
-                iso=float(exp_row.get("iso", 0.0) or 0.0),
+                iso=self._iso(exp_row),
                 xwoba=float(self._pick(exp_row, "xwoba") or 0.0),
                 xslg=float(self._pick(exp_row, "xslg") or 0.0),
             )
@@ -239,29 +268,43 @@ class PybaseballStatcastProvider(StatcastProvider):
         self._pitcher_profile_cache[player] = result
         return result
 
-    def _pitch_mix(self, pyb, player: str) -> Dict[str, float]:
-        """Real pitch-type usage% for a pitcher, from their own season of
-        Statcast pitch-level data - e.g. {"FF": 0.42, "SL": 0.24, ...}.
-        Feeds `mlb_props.matchup`'s pitch-mix-edge component. Best-effort:
-        an empty dict here just means that component defaults to neutral,
-        same as any other missing signal.
+    def _pitcher_arsenal(self, pyb, player: str) -> "tuple[Dict[str, float], Optional[str]]":
+        """Real pitch-type usage% (e.g. {"FF": 0.42, "SL": 0.24, ...},
+        feeds `mlb_props.matchup`'s pitch-mix-edge component) and real
+        throwing hand, both from the pitcher's own season of Statcast
+        pitch-level data - the exitvelo/expected-stats leaderboards used
+        elsewhere in this class don't carry either (confirmed live; see
+        `_COLUMN_ALIASES`' docstring), so `row.get("pitch_hand", ...)`
+        elsewhere in this method silently defaults to "R" for every
+        pitcher, including real lefties - which then corrupts the
+        platoon-edge component downstream for every batter facing one.
+        Both values come from the same fetch, so cached together.
+        Best-effort: an empty mix / None throws just means those
+        components default to neutral, same as any other missing signal.
         """
         if player in self._pitch_mix_cache:
-            return self._pitch_mix_cache[player]
+            return self._pitch_mix_cache[player], self._throws_cache.get(player)
         mix: Dict[str, float] = {}
+        throws: Optional[str] = None
         try:
             player_id = lookup_mlbam_id(pyb, player, self._id_cache)
             if player_id is not None:
                 start = f"{self.year}-03-01"
                 end = min(date.today(), date(self.year, 11, 30)).isoformat()
                 pitches = pyb.statcast_pitcher(start, end, player_id)
-                if pitches is not None and not pitches.empty and "pitch_type" in pitches.columns:
-                    counts = pitches["pitch_type"].dropna().value_counts(normalize=True)
-                    mix = {str(k): round(float(v), 4) for k, v in counts.items()}
+                if pitches is not None and not pitches.empty:
+                    if "pitch_type" in pitches.columns:
+                        counts = pitches["pitch_type"].dropna().value_counts(normalize=True)
+                        mix = {str(k): round(float(v), 4) for k, v in counts.items()}
+                    if "p_throws" in pitches.columns:
+                        hand_values = pitches["p_throws"].dropna()
+                        if not hand_values.empty:
+                            throws = str(hand_values.iloc[0])[:1] or None
         except Exception:
-            logger.warning("Pitch-mix fetch failed for %r - pitch_mix_edge will default to neutral", player, exc_info=True)
+            logger.warning("Pitch-arsenal fetch failed for %r - pitch_mix/throws will default to neutral", player, exc_info=True)
         self._pitch_mix_cache[player] = mix
-        return mix
+        self._throws_cache[player] = throws
+        return mix, throws
 
     def _pitcher_profile_uncached(self, player: str) -> Optional[PitcherProfile]:
         pyb = self._pyb()
@@ -308,11 +351,14 @@ class PybaseballStatcastProvider(StatcastProvider):
                 logger.warning("FanGraphs pitching_stats fetch failed - HR/9 defaulting to 0.0 for all pitchers", exc_info=True)
                 self._fg_pitching_failed = True
 
+        pitch_mix, real_throws = self._pitcher_arsenal(pyb, player)
+        fallback_throws = str(row.get("pitch_hand", row.get("p_throws", "R")))[:1] or "R"
+
         try:
             return PitcherProfile(
                 player=player,
                 team=str(row.get("team_name", row.get("team", ""))),
-                throws=str(row.get("pitch_hand", row.get("p_throws", "R")))[:1] or "R",
+                throws=real_throws or fallback_throws,
                 ip=float(row.get("ip", 0.0) or 0.0),
                 barrel_pct_allowed=float(self._pick(row, "barrel_pct") or 0.0),
                 hard_hit_pct_allowed=float(self._pick(row, "hard_hit_pct") or 0.0),
@@ -321,7 +367,7 @@ class PybaseballStatcastProvider(StatcastProvider):
                 hr_fb_pct_allowed=float(row.get("hr_fb_ratio", row.get("hr_fb", 0.0)) or 0.0),
                 xwoba_allowed=float(self._pick(exp_row, "xwoba") or 0.0),
                 xslg_allowed=float(self._pick(exp_row, "xslg") or 0.0),
-                pitch_mix=self._pitch_mix(pyb, player),
+                pitch_mix=pitch_mix,
             )
         except (KeyError, TypeError, ValueError):
             logger.exception("Could not parse Statcast pitcher row for %r - check _COLUMN_ALIASES", player)
