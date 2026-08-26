@@ -13,7 +13,7 @@ import smtplib
 from email.message import EmailMessage
 from typing import Iterable, List, Optional
 
-from ..models import Discrepancy
+from ..models import Alertable
 from .base import Notifier
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class EmailNotifier(Notifier):
         if missing:
             raise ValueError(f"EmailNotifier is missing required config: {', '.join(missing)}")
 
-    def notify(self, discrepancies: Iterable[Discrepancy]) -> None:
+    def notify(self, discrepancies: Iterable[Alertable]) -> None:
         discrepancies = list(discrepancies)
         if not discrepancies:
             return

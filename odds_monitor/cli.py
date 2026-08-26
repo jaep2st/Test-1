@@ -56,13 +56,21 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         action="append",
         dest="leagues",
         default=None,
-        help="League to monitor (repeatable, e.g. --league nba --league nfl). Default: nba, nfl.",
+        help="League to monitor (repeatable, e.g. --league nba --league mlb). Default: nba, nfl, mlb.",
     )
     parser.add_argument(
         "--min-spread",
         type=float,
         default=2.0,
-        help="Minimum point gap between books required to flag a discrepancy (default: 2.0).",
+        help="Minimum point gap between books required to flag a line-based prop discrepancy "
+        "(e.g. player_points) (default: 2.0).",
+    )
+    parser.add_argument(
+        "--min-prob-spread",
+        type=float,
+        default=8.0,
+        help="Minimum implied win-probability gap, in percentage points, required to flag a "
+        "binary Yes/No prop discrepancy (e.g. player_home_runs) (default: 8.0).",
     )
     parser.add_argument(
         "--interval",
@@ -105,7 +113,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-    leagues = args.leagues or ["nba", "nfl"]
+    leagues = args.leagues or ["nba", "nfl", "mlb"]
 
     try:
         provider = build_provider(args)
@@ -115,9 +123,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     if args.once:
-        run_once(provider, leagues, args.min_spread, notifiers)
+        run_once(provider, leagues, args.min_spread, args.min_prob_spread, notifiers)
     else:
-        run_forever(provider, leagues, args.min_spread, notifiers, args.interval)
+        run_forever(provider, leagues, args.min_spread, args.min_prob_spread, notifiers, args.interval)
     return 0
 
 

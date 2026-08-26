@@ -16,5 +16,11 @@ def test_parse_args_defaults():
     args = parse_args([])
     assert args.leagues is None
     assert args.min_spread == 2.0
+    assert args.min_prob_spread == 8.0
     assert args.interval == 300.0
     assert args.notify == []
+
+
+def test_cli_mock_once_covers_mlb_home_run_props():
+    exit_code = main(["--mock", "--mock-seed", "11", "--league", "mlb", "--once", "--log-level", "WARNING"])
+    assert exit_code == 0

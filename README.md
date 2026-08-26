@@ -1,9 +1,16 @@
 # Odds Discrepancy Monitor
 
-Watches player-prop lines (points, assists, rebounds, etc.) across
-sportsbooks and alerts you whenever the same prop's line differs by 2 or
-more points between books - a signal worth a closer look for +EV or
-middling opportunities.
+Watches player props across sportsbooks and alerts you when books disagree
+enough to be worth a look. It handles two different shapes of prop, each
+compared the way it's actually priced:
+
+- **Line props** (points, assists, rebounds, passing yards, ...) - flagged
+  when the point line itself differs by `--min-spread` (default 2.0)
+  between books.
+- **Binary Yes/No props** (e.g. "to hit a home run") - these have no line,
+  only a price, so they're flagged when the *implied win probability*
+  derived from the odds differs by `--min-prob-spread` (default 8.0
+  percentage points) between books.
 
 Pipeline: **fetch** lines from a provider -> **detect** cross-book gaps ->
 **notify** you (console, Discord, and/or email).
@@ -72,8 +79,9 @@ python main.py --notify discord --notify email
 
 | Flag | Default | Description |
 |---|---|---|
-| `--league` | `nba`, `nfl` | League to monitor; repeatable |
-| `--min-spread` | `2.0` | Minimum point gap to flag |
+| `--league` | `nba`, `nfl`, `mlb` | League to monitor; repeatable |
+| `--min-spread` | `2.0` | Minimum point gap to flag on line props (e.g. player_points) |
+| `--min-prob-spread` | `8.0` | Minimum implied win-probability gap (percentage points) to flag on binary Yes/No props (e.g. player_home_runs) |
 | `--interval` | `300` | Seconds between checks (continuous mode) |
 | `--once` | off | Run a single check and exit |
 | `--mock` | off | Use synthetic data, no API key needed |
@@ -102,12 +110,14 @@ Example crontab entry, checking every 5 minutes:
 
 ```
 odds_monitor/
-  models.py               PropLine / Discrepancy data classes
-  detector.py              groups lines and flags >= min-spread gaps
+  models.py               PropLine / Discrepancy / OddsDiscrepancy data classes
+  odds_math.py             American odds <-> implied probability conversions
+  detector.py              find_discrepancies (line props) and
+                             find_odds_discrepancies (binary Yes/No props)
   providers/
     base.py                 OddsProvider interface
     betstamp.py              real Betstamp API client
-    mock.py                  synthetic data, no API key needed
+    mock.py                  synthetic data (line + binary props), no API key needed
   notifiers/
     base.py                 Notifier interface
     console.py               logs to stdout

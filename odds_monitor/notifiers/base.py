@@ -3,10 +3,10 @@
 from abc import ABC, abstractmethod
 from typing import Iterable
 
-from ..models import Discrepancy
+from ..models import Alertable
 
 
 class Notifier(ABC):
     @abstractmethod
-    def notify(self, discrepancies: Iterable[Discrepancy]) -> None:
+    def notify(self, discrepancies: Iterable[Alertable]) -> None:
         raise NotImplementedError

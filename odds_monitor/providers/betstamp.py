@@ -35,14 +35,14 @@ _FIELD_ALIASES: Dict[str, Tuple[str, ...]] = {
     "player": ("player", "player_name", "participant"),
     "team": ("team", "team_name", "player_team"),
     "market": ("bet_type", "market", "market_type", "prop_type"),
-    "side": ("side", "over_under", "selection"),
+    "side": ("side", "over_under", "selection", "outcome", "yes_no"),
     "line": ("line", "points", "value", "handicap"),
     "odds": ("odds", "price", "american_odds"),
     "sportsbook": ("book", "sportsbook", "book_name", "book_id"),
     "event": ("event", "matchup", "game"),
 }
 
-_REQUIRED_FIELDS = ("player", "market", "side", "line", "sportsbook", "event")
+_REQUIRED_FIELDS = ("player", "market", "side", "sportsbook", "event")
 
 
 class BetstampProvider(OddsProvider):
@@ -114,7 +114,11 @@ class BetstampProvider(OddsProvider):
             league=league,
             market=str(values["market"]),
             side=str(values["side"]).lower(),
-            line=float(values["line"]),
+            # Binary props (e.g. "to hit a home run") often carry no line at
+            # all in the API response - default to 0.5 as a placeholder so
+            # downstream code always has a numeric line to work with. Only
+            # over/under props actually compare this value.
+            line=float(values["line"]) if values["line"] is not None else 0.5,
             odds=int(values["odds"]) if values["odds"] is not None else None,
             sportsbook=str(values["sportsbook"]),
             event=str(values["event"]),

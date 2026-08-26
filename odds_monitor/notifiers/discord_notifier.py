@@ -11,7 +11,7 @@ from typing import Iterable, Optional
 
 import requests
 
-from ..models import Discrepancy
+from ..models import Alertable
 from .base import Notifier
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ class DiscordNotifier(Notifier):
             raise ValueError("Set webhook_url=... or the DISCORD_WEBHOOK_URL env var to use DiscordNotifier.")
         self.timeout = timeout
 
-    def notify(self, discrepancies: Iterable[Discrepancy]) -> None:
+    def notify(self, discrepancies: Iterable[Alertable]) -> None:
         discrepancies = list(discrepancies)
         if not discrepancies:
             return

@@ -5,13 +5,13 @@ what fired, and sufficient on its own if you're watching the terminal.
 import logging
 from typing import Iterable
 
-from ..models import Discrepancy
+from ..models import Alertable
 from .base import Notifier
 
 logger = logging.getLogger(__name__)
 
 
 class ConsoleNotifier(Notifier):
-    def notify(self, discrepancies: Iterable[Discrepancy]) -> None:
+    def notify(self, discrepancies: Iterable[Alertable]) -> None:
         for d in discrepancies:
             logger.warning(d.describe())
