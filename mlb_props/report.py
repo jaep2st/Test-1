@@ -14,6 +14,14 @@ def _fmt_pct(x: float) -> str:
     return f"{x * 100:.1f}%"
 
 
+def _fmt_opt_pct(x) -> str:
+    return _fmt_pct(x) if x is not None else "n/a"
+
+
+def _fmt_opt_signed_pct(x, digits: int = 1) -> str:
+    return f"{x:+.{digits}%}" if x is not None else "n/a"
+
+
 def _truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
@@ -62,11 +70,16 @@ def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int) -> str:
         wind = "dome" if e.is_dome else f"{abs(e.wind_out_mph):.0f}mph {'out' if e.wind_out_mph > 0 else 'in' if e.wind_out_mph < 0 else 'calm'}"
         temp = f"{e.temp_f:.0f}F" if e.temp_f is not None else "n/a"
         weather = f"{wind}, {temp} ({e.weather_boost_pct:+.1f}%)"
+        # market_fair_prob/edge_vs_market/ev_percent_market are None for a
+        # single-sided market (real price, but no second side to de-vig a
+        # fair consensus from - see edges.py's module docstring); shown as
+        # "n/a" rather than crashing or hiding an otherwise-real price.
+        ev_market = f"{e.ev_percent_market:+.1f}%" if e.ev_percent_market is not None else "n/a"
         lines.append(
             f"{_truncate(e.player, 20):<20} {_truncate(e.event, 16):<16} {_fmt_pct(e.model_prob):>7} "
             f"{e.best_line.odds:>+7d} {e.best_line.sportsbook:<10} "
-            f"{_fmt_pct(e.market_fair_prob):>8} {e.edge_vs_market:>+7.1%} "
-            f"{e.ev_percent_model:>+7.1f}% {e.ev_percent_market:>+7.1f}% {e.books_quoting:>4} {weather:<22}"
+            f"{_fmt_opt_pct(e.market_fair_prob):>8} {_fmt_opt_signed_pct(e.edge_vs_market):>7} "
+            f"{e.ev_percent_model:>+7.1f}% {ev_market:>8} {e.books_quoting:>4} {weather:<22}"
         )
     return "\n".join(lines)
 
