@@ -123,6 +123,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Extra batter full name to include, matched to the first slate game if no real lineup is posted yet (repeatable).",
     )
     parser.add_argument("--min-ev", type=float, default=0.0, help="Minimum EV%% (by our model) required to show a prop (default: 0, i.e. show all).")
+    parser.add_argument(
+        "--max-candidates",
+        type=int,
+        default=30,
+        help="Cap on how many batters get real (network-bound) matchup/hot-streak lookups, chosen by a cheap "
+        "Statcast-only prefilter pass (default: 30). Real providers cost a request per player for those two "
+        "signals, so on a full slate with the active-roster fallback (~150-250+ batters) this is what keeps a "
+        "run from taking a very long time; raise it for more thorough (but slower) coverage.",
+    )
     parser.add_argument("--top", type=int, default=15, help="Max rows to show per section (default: 15).")
     parser.add_argument("--api-key", default=None, help="Betstamp API key (or set BETSTAMP_API_KEY). Not needed with --mock.")
     parser.add_argument("--books", action="append", default=None, help="Restrict to specific sportsbook IDs (repeatable).")
@@ -152,6 +161,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         odds=odds,
         extra_batters=args.batters,
         min_ev_percent=args.min_ev,
+        max_candidates=args.max_candidates,
     )
     text = render_report(report, top=args.top)
 
