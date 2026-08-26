@@ -21,7 +21,10 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import date
 from typing import Dict, List, Optional
+
+from ._ids import lookup_mlbam_id
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +160,13 @@ class PybaseballStatcastProvider(StatcastProvider):
         self._pitcher_expected_cache: Optional["object"] = None
         self._fg_pitching_cache: Optional["object"] = None
         self._fg_pitching_failed = False
+        self._id_cache: Dict[str, Optional[int]] = {}
+        self._pitch_mix_cache: Dict[str, Dict[str, float]] = {}
+        # A team's ~9 roster batters all share the same 1-2 probable
+        # pitchers, so without memoizing by name, pitcher_profile() (now a
+        # non-trivial fetch, with the pitch-mix lookup below) would redo
+        # the same work ~9x per game.
+        self._pitcher_profile_cache: Dict[str, Optional["PitcherProfile"]] = {}
 
     def _pyb(self):
         try:
@@ -222,6 +232,38 @@ class PybaseballStatcastProvider(StatcastProvider):
             return None
 
     def pitcher_profile(self, player: str) -> Optional[PitcherProfile]:
+        if player in self._pitcher_profile_cache:
+            return self._pitcher_profile_cache[player]
+
+        result = self._pitcher_profile_uncached(player)
+        self._pitcher_profile_cache[player] = result
+        return result
+
+    def _pitch_mix(self, pyb, player: str) -> Dict[str, float]:
+        """Real pitch-type usage% for a pitcher, from their own season of
+        Statcast pitch-level data - e.g. {"FF": 0.42, "SL": 0.24, ...}.
+        Feeds `mlb_props.matchup`'s pitch-mix-edge component. Best-effort:
+        an empty dict here just means that component defaults to neutral,
+        same as any other missing signal.
+        """
+        if player in self._pitch_mix_cache:
+            return self._pitch_mix_cache[player]
+        mix: Dict[str, float] = {}
+        try:
+            player_id = lookup_mlbam_id(pyb, player, self._id_cache)
+            if player_id is not None:
+                start = f"{self.year}-03-01"
+                end = min(date.today(), date(self.year, 11, 30)).isoformat()
+                pitches = pyb.statcast_pitcher(start, end, player_id)
+                if pitches is not None and not pitches.empty and "pitch_type" in pitches.columns:
+                    counts = pitches["pitch_type"].dropna().value_counts(normalize=True)
+                    mix = {str(k): round(float(v), 4) for k, v in counts.items()}
+        except Exception:
+            logger.warning("Pitch-mix fetch failed for %r - pitch_mix_edge will default to neutral", player, exc_info=True)
+        self._pitch_mix_cache[player] = mix
+        return mix
+
+    def _pitcher_profile_uncached(self, player: str) -> Optional[PitcherProfile]:
         pyb = self._pyb()
         # These two Baseball Savant leaderboards are the essential data for
         # this profile - if either fails, there's nothing useful to return.
@@ -279,7 +321,7 @@ class PybaseballStatcastProvider(StatcastProvider):
                 hr_fb_pct_allowed=float(row.get("hr_fb_ratio", row.get("hr_fb", 0.0)) or 0.0),
                 xwoba_allowed=float(self._pick(exp_row, "xwoba") or 0.0),
                 xslg_allowed=float(self._pick(exp_row, "xslg") or 0.0),
-                pitch_mix={},  # populate via mlb_props.matchup's pitch-mix lookup
+                pitch_mix=self._pitch_mix(pyb, player),
             )
         except (KeyError, TypeError, ValueError):
             logger.exception("Could not parse Statcast pitcher row for %r - check _COLUMN_ALIASES", player)
