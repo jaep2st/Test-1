@@ -229,8 +229,29 @@ def run_pipeline(
             batter_name, batter.bats, pitcher.player, pitcher.throws, pitcher.pitch_mix
         )
 
-        hr_scores.append(compute_hr_score(batter, pitcher, matchup, park_ctx, heat))
-        tb_scores.append(compute_total_bases_score(batter, pitcher, matchup, park_ctx, heat))
+        hr_result = compute_hr_score(batter, pitcher, matchup, park_ctx, heat)
+        tb_result = compute_total_bases_score(batter, pitcher, matchup, park_ctx, heat)
+        hr_scores.append(hr_result)
+        tb_scores.append(tb_result)
+
+        # Full component breakdown for every scored candidate - not shown
+        # in the report itself (too dense for a ranked table), but useful
+        # for writing up *why* a specific player ranked where they did.
+        # Logged at INFO (not DEBUG) so it survives even without
+        # --log-level DEBUG, and printed with a stable "CANDIDATE_DETAIL"
+        # prefix so it's easy to grep out of a run's logs.
+        logger.info(
+            "CANDIDATE_DETAIL %s vs %s (%s) | %s | %s | %s | HR components=%s | TB components=%s",
+            batter_name,
+            pitcher.player,
+            ctx["event"],
+            batter,
+            pitcher,
+            matchup,
+            hr_result.components,
+            tb_result.components,
+        )
+        logger.info("CANDIDATE_DETAIL %s heat=%s", batter_name, heat)
 
     try:
         odds_lines = odds.fetch_player_props("mlb")
