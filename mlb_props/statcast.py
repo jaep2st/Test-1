@@ -25,6 +25,47 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Column that identifies a player varies by which Baseball Savant CSV
+# endpoint pybaseball is wrapping: some leaderboards use a plain
+# "player_name" column, others (confirmed via a live run against the
+# `/leaderboard/statcast` endpoint behind statcast_*_exitvelo_barrels) use
+# "last_name, first_name" - literally "Last, First" as one column, comma
+# included. Tried in order; add more if a future pybaseball/Savant version
+# uses something else (check `--log-level DEBUG` output, which logs the
+# real column names on every lookup).
+_NAME_COLUMN_CANDIDATES = ("player_name", "last_name, first_name", "Name", "name")
+
+
+def _find_player_row(df, player: str):
+    """Best-effort, never-raises row lookup by full name across whichever
+    of `_NAME_COLUMN_CANDIDATES` the given DataFrame actually has. Returns
+    an empty slice (falsy via `.empty`) if nothing matches or the frame's
+    schema doesn't include any recognized name column.
+    """
+    try:
+        logger.debug("Matching %r against columns: %s", player, list(df.columns))
+        target = player.strip().lower()
+        last_first = None
+        parts = target.rsplit(" ", 1)
+        if len(parts) == 2:
+            last_first = f"{parts[1]}, {parts[0]}"  # "Last, First" ordering, lowercased
+
+        for col in _NAME_COLUMN_CANDIDATES:
+            if col not in df.columns:
+                continue
+            values = df[col].astype(str).str.lower()
+            match = df[values == target]
+            if match.empty and last_first:
+                match = df[values == last_first]
+            if not match.empty:
+                return match
+        logger.warning(
+            "No recognized player-name column for %r among %s - skipping this row", player, list(df.columns)
+        )
+    except Exception:
+        logger.exception("Player lookup failed unexpectedly for %r", player)
+    return df.iloc[0:0]
+
 
 @dataclass(frozen=True)
 class BatterProfile:
@@ -146,19 +187,16 @@ class PybaseballStatcastProvider(StatcastProvider):
 
         expected = self._batter_expected_cache
         df = self._batter_cache
-        match = df[df["player_name"].str.lower() == player.strip().lower()]
+        match = _find_player_row(df, player)
         if match.empty:
             logger.warning("No Statcast batter row found for %r", player)
             return None
         row = match.iloc[0].to_dict()
 
         exp_row: Dict = {}
-        try:
-            exp_match = expected[expected["player_name"].str.lower() == player.strip().lower()]
-            if not exp_match.empty:
-                exp_row = exp_match.iloc[0].to_dict()
-        except Exception:
-            logger.debug("No expected-stats row for %r", player)
+        exp_match = _find_player_row(expected, player)
+        if not exp_match.empty:
+            exp_row = exp_match.iloc[0].to_dict()
 
         try:
             return BatterProfile(
@@ -198,19 +236,16 @@ class PybaseballStatcastProvider(StatcastProvider):
 
         expected = self._pitcher_expected_cache
         df = self._pitcher_cache
-        match = df[df["player_name"].str.lower() == player.strip().lower()]
+        match = _find_player_row(df, player)
         if match.empty:
             logger.warning("No Statcast pitcher row found for %r", player)
             return None
         row = match.iloc[0].to_dict()
 
         exp_row: Dict = {}
-        try:
-            exp_match = expected[expected["player_name"].str.lower() == player.strip().lower()]
-            if not exp_match.empty:
-                exp_row = exp_match.iloc[0].to_dict()
-        except Exception:
-            logger.debug("No expected-stats row for %r", player)
+        exp_match = _find_player_row(expected, player)
+        if not exp_match.empty:
+            exp_row = exp_match.iloc[0].to_dict()
 
         # HR/9 comes from FanGraphs, a separate (and less reliable - it's
         # blocked outright from some hosting providers, e.g. GitHub Actions
