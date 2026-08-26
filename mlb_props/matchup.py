@@ -13,7 +13,10 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import date
 from typing import Dict, Optional
+
+from ._ids import lookup_mlbam_id
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +67,7 @@ class PybaseballMatchupProvider(MatchupProvider):
 
     def __init__(self, year: int):
         self.year = year
-        self._id_cache: Dict[str, int] = {}
+        self._id_cache: Dict[str, Optional[int]] = {}
 
     def _pyb(self):
         try:
@@ -74,23 +77,7 @@ class PybaseballMatchupProvider(MatchupProvider):
         return pybaseball
 
     def _lookup_id(self, full_name: str) -> Optional[int]:
-        if full_name in self._id_cache:
-            return self._id_cache[full_name]
-        pyb = self._pyb()
-        parts = full_name.strip().split(" ", 1)
-        if len(parts) != 2:
-            return None
-        first, last = parts
-        try:
-            result = pyb.playerid_lookup(last, first)
-        except Exception:
-            logger.exception("playerid_lookup failed for %r", full_name)
-            return None
-        if result.empty:
-            return None
-        pid = int(result.iloc[0]["key_mlbam"])
-        self._id_cache[full_name] = pid
-        return pid
+        return lookup_mlbam_id(self._pyb(), full_name, self._id_cache)
 
     def get_matchup(
         self, batter: str, bats: str, pitcher: str, pitcher_throws: str, pitcher_pitch_mix: Dict[str, float]
@@ -103,7 +90,7 @@ class PybaseballMatchupProvider(MatchupProvider):
             return MatchupProfile(batter, pitcher, LEAGUE_AVG_WOBA, 0, 0, 0, 0.0, 0.0, 0.0)
 
         start = f"{self.year}-03-01"
-        end = f"{self.year}-11-30"
+        end = min(date.today(), date(self.year, 11, 30)).isoformat()
         try:
             log = pyb.statcast_batter(start, end, batter_id)
         except Exception:

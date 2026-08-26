@@ -42,7 +42,7 @@ Real mode needs several free-but-separate data sources wired together:
 | Today's slate + probable pitchers | MLB Stats API (`statsapi.mlb.com`) | No |
 | Barrel%, hard-hit%, exit velo, launch angle, xwOBA/xSLG | Baseball Savant, via `pybaseball` | No |
 | Platoon splits, batter-vs-pitcher history, pitch-mix fit | Statcast pitch logs, via `pybaseball` | No |
-| Recent form (last 7/15/30 days) | FanGraphs range stats, via `pybaseball` | No |
+| Recent form (last 7/15/30 days) | Baseball Savant pitch logs, via `pybaseball` | No |
 | Ballpark factors + live wind/temperature | Static table + Open-Meteo | No |
 | Cross-book player-prop odds | Betstamp Sports Betting API | Yes (props run model-only without it) |
 

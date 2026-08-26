@@ -41,7 +41,7 @@ from odds_monitor.providers.base import OddsProvider
 from odds_monitor.providers.betstamp import BetstampProvider
 
 from mlb_props.context import LiveParkWeatherProvider, MockParkWeatherProvider, ParkWeatherProvider
-from mlb_props.hot_streak import HotStreakProvider, MockHotStreakProvider, PybaseballHotStreakProvider
+from mlb_props.hot_streak import HotStreakProvider, MockHotStreakProvider, StatcastHotStreakProvider
 from mlb_props.market import MockMlbPropsOddsProvider, NoOddsProvider
 from mlb_props.matchup import MatchupProvider, MockMatchupProvider, PybaseballMatchupProvider
 from mlb_props.html_report import render_html_report
@@ -87,7 +87,7 @@ def build_providers(args: argparse.Namespace):
     schedule = MlbStatsApiScheduleProvider()
     statcast = PybaseballStatcastProvider(year=year)
     matchup = PybaseballMatchupProvider(year=year)
-    hot_streak = PybaseballHotStreakProvider(season_start=date(year, 3, 1))
+    hot_streak = StatcastHotStreakProvider(season_start=date(year, 3, 1))
     park_weather = LiveParkWeatherProvider()
 
     api_key = args.api_key or os.environ.get("BETSTAMP_API_KEY")
