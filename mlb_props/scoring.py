@@ -46,16 +46,16 @@ def _lerp3(score: float, at0: float, at50: float, at100: float) -> float:
 # (weight, normalization range) for each HR-relevant component. Ranges are
 # realistic full-season MLB bounds for qualified hitters/pitchers.
 HR_WEIGHTS: Dict[str, float] = {
-    "barrel_pct": 0.20,
+    "barrel_pct": 0.18,
     "hard_hit_pct": 0.13,
     "avg_exit_velo": 0.08,
     "hr_fb_pct": 0.12,
-    "pull_air_pct": 0.08,
+    "pull_air_pct": 0.06,
     "platoon_edge": 0.10,
     "pitcher_allowed": 0.12,
     "pitch_mix_edge": 0.05,
     "park_factor": 0.06,
-    "weather_boost": 0.04,
+    "weather_boost": 0.08,
     "hot_streak": 0.02,
 }
 assert abs(sum(HR_WEIGHTS.values()) - 1.0) < 1e-9
@@ -67,6 +67,13 @@ class HRScoreResult:
     score: float  # 0-100 composite
     model_prob: float  # heuristic per-game HR probability implied by the score
     components: Dict[str, float]  # each component's 0-100 contribution, for transparency
+    # Raw weather inputs, surfaced separately from `components` so callers
+    # can show *why* weather moved the score, not just that it did.
+    park: str
+    wind_out_mph: float  # positive = blowing out (helps HR), negative = blowing in
+    temp_f: Optional[float]
+    is_dome: bool
+    weather_boost_pct: float  # heuristic % shift to HR odds from wind + temp
 
 
 def compute_hr_score(
@@ -102,7 +109,17 @@ def compute_hr_score(
     # a tough spot, ~10% for a league-average everyday hitter in a neutral
     # spot, ~23% for an elite power bat in a great matchup/park/weather spot.
     model_prob = _lerp3(score, at0=0.04, at50=0.10, at100=0.23) / 1.0
-    return HRScoreResult(player=batter.player, score=round(score, 1), model_prob=round(model_prob, 4), components=components)
+    return HRScoreResult(
+        player=batter.player,
+        score=round(score, 1),
+        model_prob=round(model_prob, 4),
+        components=components,
+        park=park_weather.park,
+        wind_out_mph=park_weather.wind_out_mph,
+        temp_f=park_weather.temp_f,
+        is_dome=park_weather.is_dome,
+        weather_boost_pct=park_weather.weather_hr_boost_pct,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -110,15 +127,15 @@ def compute_hr_score(
 # ---------------------------------------------------------------------------
 
 TB_WEIGHTS: Dict[str, float] = {
-    "iso": 0.20,
-    "xslg": 0.18,
+    "iso": 0.18,
+    "xslg": 0.17,
     "hard_hit_pct": 0.14,
     "sweet_spot_pct": 0.08,
     "barrel_pct": 0.10,
     "platoon_edge": 0.10,
     "pitcher_allowed": 0.12,
     "park_factor": 0.04,
-    "weather_boost": 0.02,
+    "weather_boost": 0.05,
     "hot_streak": 0.02,
 }
 assert abs(sum(TB_WEIGHTS.values()) - 1.0) < 1e-9
@@ -130,6 +147,11 @@ class TotalBasesScoreResult:
     score: float
     model_prob: float  # heuristic per-game P(2+ total bases)
     components: Dict[str, float]
+    park: str
+    wind_out_mph: float
+    temp_f: Optional[float]
+    is_dome: bool
+    weather_boost_pct: float
 
 
 def compute_total_bases_score(
@@ -160,5 +182,13 @@ def compute_total_bases_score(
     # can push well past 60%.
     model_prob = _lerp3(score, at0=0.24, at50=0.40, at100=0.63)
     return TotalBasesScoreResult(
-        player=batter.player, score=round(score, 1), model_prob=round(model_prob, 4), components=components
+        player=batter.player,
+        score=round(score, 1),
+        model_prob=round(model_prob, 4),
+        components=components,
+        park=park_weather.park,
+        wind_out_mph=park_weather.wind_out_mph,
+        temp_f=park_weather.temp_f,
+        is_dome=park_weather.is_dome,
+        weather_boost_pct=park_weather.weather_hr_boost_pct,
     )

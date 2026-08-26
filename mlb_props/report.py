@@ -56,14 +56,17 @@ def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int) -> str:
 
     lines.append(
         f"{'Player':<20} {'Event':<16} {'Model':>7} {'Best':>7} {'Book':<10} "
-        f"{'MktFair':>8} {'Edge':>7} {'EV(mdl)':>8} {'EV(mkt)':>8} {'Bks':>4}"
+        f"{'MktFair':>8} {'Edge':>7} {'EV(mdl)':>8} {'EV(mkt)':>8} {'Bks':>4} {'Weather':<22}"
     )
     for e in priced[:top]:
+        wind = "dome" if e.is_dome else f"{abs(e.wind_out_mph):.0f}mph {'out' if e.wind_out_mph > 0 else 'in' if e.wind_out_mph < 0 else 'calm'}"
+        temp = f"{e.temp_f:.0f}F" if e.temp_f is not None else "n/a"
+        weather = f"{wind}, {temp} ({e.weather_boost_pct:+.1f}%)"
         lines.append(
             f"{_truncate(e.player, 20):<20} {_truncate(e.event, 16):<16} {_fmt_pct(e.model_prob):>7} "
             f"{e.best_line.odds:>+7d} {e.best_line.sportsbook:<10} "
             f"{_fmt_pct(e.market_fair_prob):>8} {e.edge_vs_market:>+7.1%} "
-            f"{e.ev_percent_model:>+7.1f}% {e.ev_percent_market:>+7.1f}% {e.books_quoting:>4}"
+            f"{e.ev_percent_model:>+7.1f}% {e.ev_percent_market:>+7.1f}% {e.books_quoting:>4} {weather:<22}"
         )
     return "\n".join(lines)
 

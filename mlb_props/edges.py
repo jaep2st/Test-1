@@ -40,16 +40,29 @@ class EdgeCandidate:
     edge_vs_market: Optional[float]  # model_prob - market_fair_prob; positive = we like it more than the market does
     price_spread_percent: Optional[float]  # best vs. worst book gap, for line-shopping context
     books_quoting: int
+    park: str
+    wind_out_mph: float
+    temp_f: Optional[float]
+    is_dome: bool
+    weather_boost_pct: float
 
     @property
     def has_market_data(self) -> bool:
         return self.best_line is not None
 
+    @property
+    def weather_note(self) -> str:
+        if self.is_dome:
+            return f"{self.park}: roof closed, no wind effect"
+        wind_dir = "out" if self.wind_out_mph > 0 else ("in" if self.wind_out_mph < 0 else "calm")
+        temp = f"{self.temp_f:.0f}F" if self.temp_f is not None else "n/a"
+        return f"{self.park}: wind {abs(self.wind_out_mph):.0f}mph {wind_dir}, {temp} ({self.weather_boost_pct:+.1f}% HR odds)"
+
     def describe(self) -> str:
         if not self.has_market_data:
             return (
                 f"{self.player} ({self.event}) - {self.market}: model {self.model_score:.0f}/100 "
-                f"({self.model_prob:.1%}) - no market price found"
+                f"({self.model_prob:.1%}) - no market price found | {self.weather_note}"
             )
         return (
             f"{self.player} ({self.event}) - {self.market}: model {self.model_score:.0f}/100 "
@@ -57,7 +70,7 @@ class EdgeCandidate:
             f"[edge {self.edge_vs_market:+.1%}] | best price {self.best_line.sportsbook} "
             f"{self.best_line.odds:+d} (EV {self.ev_percent_model:+.1f}% by our model, "
             f"{self.ev_percent_market:+.1f}% vs. market consensus) | "
-            f"{self.books_quoting} books, {self.price_spread_percent:.1f}pt price spread"
+            f"{self.books_quoting} books, {self.price_spread_percent:.1f}pt price spread | {self.weather_note}"
         )
 
 
@@ -93,6 +106,11 @@ def _build_edges(
                     edge_vs_market=None,
                     price_spread_percent=None,
                     books_quoting=0,
+                    park=result.park,
+                    wind_out_mph=result.wind_out_mph,
+                    temp_f=result.temp_f,
+                    is_dome=result.is_dome,
+                    weather_boost_pct=result.weather_boost_pct,
                 )
             )
             continue
@@ -110,6 +128,11 @@ def _build_edges(
                 edge_vs_market=round(result.model_prob - fp.fair_prob, 4),
                 price_spread_percent=round(fp.price_spread_percent, 1),
                 books_quoting=fp.books_used,
+                park=result.park,
+                wind_out_mph=result.wind_out_mph,
+                temp_f=result.temp_f,
+                is_dome=result.is_dome,
+                weather_boost_pct=result.weather_boost_pct,
             )
         )
     return candidates
