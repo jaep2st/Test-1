@@ -223,6 +223,10 @@ def run_pipeline(
 
     for _, batter_name, ctx, batter, pitcher, park_ctx in candidates:
         event_lookup[batter_name] = ctx["event"]
+        # Real HR/fly-ball rate is worth fetching per-player here (only ~30
+        # candidates, not the full roster) - see StatcastProvider.
+        # enrich_batted_ball's docstring for why it isn't in phase 1.
+        batter = statcast.enrich_batted_ball(batter)
         heat = hot_streak.get_heat_index(batter_name, as_of=game_date)
         heat_indices.append(heat)
         matchup = matchup_provider.get_matchup(

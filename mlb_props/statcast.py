@@ -13,6 +13,10 @@ Real data comes from Baseball Savant via the `pybaseball` package:
   directly from real batted-ball events, not FanGraphs (whose `pitching_stats`
   leaderboard is blocked outright from some hosting providers, e.g. GitHub
   Actions runners hit 403s scraping it).
+- `statcast_batter(start, end, player_id)` (pitch-level Baseball Savant log,
+  batter side) for a batter's own real HR/FB% - see `enrich_batted_ball()`,
+  called only for the phase-2 prefiltered candidates in pipeline.py, not
+  every roster batter.
 
 `pybaseball` and `pandas` are optional dependencies - only required for
 `PybaseballStatcastProvider`. `MockStatcastProvider` needs neither and is
@@ -23,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Dict, List, Optional
 
@@ -123,6 +127,16 @@ class StatcastProvider(ABC):
     @abstractmethod
     def pitcher_profile(self, player: str) -> Optional[PitcherProfile]:
         raise NotImplementedError
+
+    def enrich_batted_ball(self, batter: BatterProfile) -> BatterProfile:
+        """Optionally fill in additional per-batter batted-ball fields that
+        are too expensive to compute for every roster batter up front (see
+        `pipeline.py`'s two-phase scoring) - call this only for the
+        prefiltered top candidates in phase 2, not the full-roster phase-1
+        prefilter pass. Default: no-op (return the profile unchanged);
+        override where a real per-player fetch is worth the extra cost.
+        """
+        return batter
 
 
 class PybaseballStatcastProvider(StatcastProvider):
@@ -245,14 +259,15 @@ class PybaseballStatcastProvider(StatcastProvider):
                 avg_exit_velo=float(self._pick(row, "avg_exit_velo") or 0.0),
                 avg_launch_angle=float(self._pick(row, "avg_launch_angle") or 0.0),
                 sweet_spot_pct=float(self._pick(row, "sweet_spot_pct") or 0.0),
-                # pull_air_pct and hr_fb_pct default to 0.0 (confirmed live):
-                # neither Baseball Savant leaderboard used here carries a
-                # pull% or HR/FB% column - those are normally FanGraphs
-                # fields (Pull%, HR/FB), and FanGraphs is the source that's
+                # pull_air_pct and hr_fb_pct default to 0.0 here (confirmed
+                # live): neither Baseball Savant leaderboard used in this
+                # method carries a pull% or HR/FB% column - those are
+                # normally FanGraphs fields (Pull%, HR/FB), and FanGraphs is
                 # blocked from GitHub Actions (see hot_streak.py's
-                # StatcastHotStreakProvider docstring). Their weight in the
-                # HR score (6% + 12%) is a known accuracy gap until a
-                # working source for them is wired up.
+                # StatcastHotStreakProvider docstring). hr_fb_pct gets a real
+                # value later, but only for phase-2 candidates - see
+                # `enrich_batted_ball()`. pull_air_pct has no such fix (see
+                # that method's docstring for why) and stays a known gap.
                 pull_air_pct=float(row.get("pull_percent", 0.0) or 0.0),
                 hr_fb_pct=float(row.get("hr_fb_ratio", row.get("hr_fb", 0.0)) or 0.0),
                 iso=self._iso(exp_row),
@@ -270,6 +285,52 @@ class PybaseballStatcastProvider(StatcastProvider):
         result = self._pitcher_profile_uncached(player)
         self._pitcher_profile_cache[player] = result
         return result
+
+    def enrich_batted_ball(self, batter: BatterProfile) -> BatterProfile:
+        """Fills in `hr_fb_pct` (real HR-per-fly-ball rate) from a per-batter
+        Statcast pitch-level log - the same real HR/fly-ball computation
+        already proven for pitchers in `_pitcher_arsenal`, applied here to
+        the batter's own batted balls instead of what they allowed.
+
+        Deliberately NOT called from `batter_profile()`: that method runs
+        for every roster batter in pipeline.py's cheap phase-1 prefilter
+        (up to ~150-250+ players on a full slate), and a full-season
+        pitch-level fetch per batter at that scale would reintroduce the
+        exact per-player network cost the two-phase architecture exists to
+        avoid. Call this only on the phase-2 prefiltered candidates.
+
+        `pull_air_pct` stays at its default here on purpose: Statcast pitch
+        logs carry raw hit-location coordinates (`hc_x`/`hc_y`), not a
+        ready-made "pulled" flag, and deriving pull side from those requires
+        a spray-angle formula this class has no way to verify against real
+        data (this dev environment has no network access - see the module
+        docstring). Shipping a guessed formula as a real number would be
+        worse than the honest, documented 0.0 default it replaces.
+        """
+        try:
+            pyb = self._pyb()
+            player_id = lookup_mlbam_id(pyb, batter.player, self._id_cache)
+            if player_id is None:
+                return batter
+            start = f"{self.year}-03-01"
+            end = min(date.today(), date(self.year, 11, 30)).isoformat()
+            pitches = pyb.statcast_batter(start, end, player_id)
+            if pitches is None or pitches.empty or "events" not in pitches.columns:
+                return batter
+            pa_rows = pitches[pitches["events"].notna()]
+            if pa_rows.empty or "bb_type" not in pa_rows.columns:
+                return batter
+            fb_count = int((pa_rows["bb_type"] == "fly_ball").sum())
+            if not fb_count:
+                return batter
+            hr_count = int((pa_rows["events"] == "home_run").sum())
+            hr_fb = round(hr_count / fb_count * 100, 1)
+            return replace(batter, hr_fb_pct=hr_fb)
+        except Exception:
+            logger.warning(
+                "Batted-ball enrichment failed for %r - hr_fb_pct stays at its default", batter.player, exc_info=True
+            )
+            return batter
 
     # Roughly the modern-MLB average number of plate appearances a pitcher
     # sees per 9 innings - used to convert a real HR-per-PA rate (which we
