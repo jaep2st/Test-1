@@ -8,8 +8,11 @@ Real data comes from Baseball Savant via the `pybaseball` package:
 - `statcast_batter_expected_stats(year)` / `statcast_pitcher_expected_stats(year)`
   for xwOBA, xSLG, xBA (contact-quality-adjusted outcomes, less luck-driven
   than actual results).
-- `pitching_stats(year)` (FanGraphs, also bundled with pybaseball) for HR/9,
-  FB%, and HR/FB% allowed.
+- `statcast_pitcher(start, end, player_id)` (pitch-level Baseball Savant log)
+  for pitch-mix, throwing hand, and HR/9 + HR/FB% allowed - all derived
+  directly from real batted-ball events, not FanGraphs (whose `pitching_stats`
+  leaderboard is blocked outright from some hosting providers, e.g. GitHub
+  Actions runners hit 403s scraping it).
 
 `pybaseball` and `pandas` are optional dependencies - only required for
 `PybaseballStatcastProvider`. `MockStatcastProvider` needs neither and is
@@ -166,11 +169,11 @@ class PybaseballStatcastProvider(StatcastProvider):
         self._batter_expected_cache: Optional["object"] = None
         self._pitcher_cache: Optional["object"] = None
         self._pitcher_expected_cache: Optional["object"] = None
-        self._fg_pitching_cache: Optional["object"] = None
-        self._fg_pitching_failed = False
         self._id_cache: Dict[str, Optional[int]] = {}
         self._pitch_mix_cache: Dict[str, Dict[str, float]] = {}
         self._throws_cache: Dict[str, Optional[str]] = {}
+        self._hr9_cache: Dict[str, float] = {}
+        self._hr_fb_allowed_cache: Dict[str, float] = {}
         # A team's ~9 roster batters all share the same 1-2 probable
         # pitchers, so without memoizing by name, pitcher_profile() (now a
         # non-trivial fetch, with the pitch-mix lookup below) would redo
@@ -268,24 +271,45 @@ class PybaseballStatcastProvider(StatcastProvider):
         self._pitcher_profile_cache[player] = result
         return result
 
-    def _pitcher_arsenal(self, pyb, player: str) -> "tuple[Dict[str, float], Optional[str]]":
-        """Real pitch-type usage% (e.g. {"FF": 0.42, "SL": 0.24, ...},
-        feeds `mlb_props.matchup`'s pitch-mix-edge component) and real
-        throwing hand, both from the pitcher's own season of Statcast
-        pitch-level data - the exitvelo/expected-stats leaderboards used
-        elsewhere in this class don't carry either (confirmed live; see
-        `_COLUMN_ALIASES`' docstring), so `row.get("pitch_hand", ...)`
-        elsewhere in this method silently defaults to "R" for every
-        pitcher, including real lefties - which then corrupts the
-        platoon-edge component downstream for every batter facing one.
-        Both values come from the same fetch, so cached together.
-        Best-effort: an empty mix / None throws just means those
-        components default to neutral, same as any other missing signal.
+    # Roughly the modern-MLB average number of plate appearances a pitcher
+    # sees per 9 innings - used to convert a real HR-per-PA rate (which we
+    # can compute directly from pitch-level data) into a HR/9 estimate,
+    # since the exitvelo/expected-stats leaderboards used elsewhere in this
+    # class don't carry innings-pitched at all (confirmed live).
+    _PA_PER_9_INNINGS = 38.3
+
+    def _pitcher_arsenal(self, pyb, player: str) -> "tuple[Dict[str, float], Optional[str], float, float]":
+        """Everything about a pitcher that isn't on the exitvelo/expected-
+        stats leaderboards, all pulled from one fetch of their own season
+        of Statcast pitch-level data and cached together:
+        - pitch-type usage%, e.g. {"FF": 0.42, "SL": 0.24, ...} - feeds
+          `mlb_props.matchup`'s pitch-mix-edge component.
+        - real throwing hand - `row.get("pitch_hand", ...)` elsewhere in
+          this class silently defaults to "R" for every pitcher, including
+          real lefties, which corrupts the platoon-edge component
+          downstream for every batter facing one.
+        - HR/9 (estimated as HR-per-PA-faced * 38.3) - this used to come
+          from FanGraphs' pitching_stats(), which returns 403 to every
+          request from a GitHub Actions runner (confirmed live), so it
+          silently defaulted to 0.0 for every pitcher, every run. This
+          estimate is real, if approximate (PA/9 varies somewhat by role
+          and league).
+        - HR/FB% allowed, computed the same way from batted-ball type.
+        Best-effort throughout: any piece that can't be computed just
+        means that component defaults to neutral, same as any other
+        missing signal.
         """
         if player in self._pitch_mix_cache:
-            return self._pitch_mix_cache[player], self._throws_cache.get(player)
+            return (
+                self._pitch_mix_cache[player],
+                self._throws_cache.get(player),
+                self._hr9_cache.get(player, 0.0),
+                self._hr_fb_allowed_cache.get(player, 0.0),
+            )
         mix: Dict[str, float] = {}
         throws: Optional[str] = None
+        hr9 = 0.0
+        hr_fb_allowed = 0.0
         try:
             player_id = lookup_mlbam_id(pyb, player, self._id_cache)
             if player_id is not None:
@@ -300,11 +324,23 @@ class PybaseballStatcastProvider(StatcastProvider):
                         hand_values = pitches["p_throws"].dropna()
                         if not hand_values.empty:
                             throws = str(hand_values.iloc[0])[:1] or None
+                    if "events" in pitches.columns:
+                        pa_rows = pitches[pitches["events"].notna()]
+                        pa_count = len(pa_rows)
+                        hr_count = int((pa_rows["events"] == "home_run").sum())
+                        if pa_count:
+                            hr9 = round((hr_count / pa_count) * self._PA_PER_9_INNINGS, 3)
+                        if "bb_type" in pa_rows.columns:
+                            fb_count = int((pa_rows["bb_type"] == "fly_ball").sum())
+                            if fb_count:
+                                hr_fb_allowed = round(hr_count / fb_count * 100, 1)
         except Exception:
-            logger.warning("Pitch-arsenal fetch failed for %r - pitch_mix/throws will default to neutral", player, exc_info=True)
+            logger.warning("Pitch-arsenal fetch failed for %r - pitch_mix/throws/HR9 will default to neutral", player, exc_info=True)
         self._pitch_mix_cache[player] = mix
         self._throws_cache[player] = throws
-        return mix, throws
+        self._hr9_cache[player] = hr9
+        self._hr_fb_allowed_cache[player] = hr_fb_allowed
+        return mix, throws, hr9, hr_fb_allowed
 
     def _pitcher_profile_uncached(self, player: str) -> Optional[PitcherProfile]:
         pyb = self._pyb()
@@ -332,26 +368,14 @@ class PybaseballStatcastProvider(StatcastProvider):
         if not exp_match.empty:
             exp_row = exp_match.iloc[0].to_dict()
 
-        # HR/9 comes from FanGraphs, a separate (and less reliable - it's
-        # blocked outright from some hosting providers, e.g. GitHub Actions
-        # runners have hit 403s scraping it) source than Baseball Savant.
-        # Isolated on purpose: a FanGraphs failure should cost us HR/9
-        # (defaults to 0.0, i.e. neutral in the pitcher_allowed component),
-        # not the entire Statcast-sourced profile above.
-        hr9 = 0.0
-        if not self._fg_pitching_failed:
-            try:
-                if self._fg_pitching_cache is None:
-                    self._fg_pitching_cache = pyb.pitching_stats(self.year, qual=self.min_ip)
-                fg_match = self._fg_pitching_cache[self._fg_pitching_cache["Name"].str.lower() == player.strip().lower()]
-                if not fg_match.empty:
-                    fg_row = fg_match.iloc[0].to_dict()
-                    hr9 = float(fg_row.get("HR/9", 0.0) or 0.0)
-            except Exception:
-                logger.warning("FanGraphs pitching_stats fetch failed - HR/9 defaulting to 0.0 for all pitchers", exc_info=True)
-                self._fg_pitching_failed = True
-
-        pitch_mix, real_throws = self._pitcher_arsenal(pyb, player)
+        # HR/9 and HR/FB%-allowed used to come from FanGraphs' pitching_stats()
+        # leaderboard - a separate, less reliable source than Baseball Savant
+        # that's blocked outright from some hosting providers (GitHub Actions
+        # runners hit 403s scraping it), which silently left every pitcher's
+        # HR/9 at 0.0. Both are now derived from the same statcast_pitcher()
+        # pitch-level log already fetched for pitch-mix/throws below, at no
+        # extra network cost and with no FanGraphs dependency.
+        pitch_mix, real_throws, hr9, hr_fb_allowed = self._pitcher_arsenal(pyb, player)
         fallback_throws = str(row.get("pitch_hand", row.get("p_throws", "R")))[:1] or "R"
 
         try:
@@ -364,7 +388,7 @@ class PybaseballStatcastProvider(StatcastProvider):
                 hard_hit_pct_allowed=float(self._pick(row, "hard_hit_pct") or 0.0),
                 avg_exit_velo_allowed=float(self._pick(row, "avg_exit_velo") or 0.0),
                 hr_per_9=hr9,
-                hr_fb_pct_allowed=float(row.get("hr_fb_ratio", row.get("hr_fb", 0.0)) or 0.0),
+                hr_fb_pct_allowed=hr_fb_allowed,
                 xwoba_allowed=float(self._pick(exp_row, "xwoba") or 0.0),
                 xslg_allowed=float(self._pick(exp_row, "xslg") or 0.0),
                 pitch_mix=pitch_mix,
