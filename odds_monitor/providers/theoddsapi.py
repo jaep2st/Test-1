@@ -186,6 +186,15 @@ class TheOddsApiProvider(OddsProvider):
                     if multi_line_players:
                         sample = next((k, v) for k, v in per_player_points.items() if len(v) >= 2)
                         logger.debug("%s/%s batter_home_runs: sample multi-line player %r has points=%s", event_label, book_key, *sample)
+                    # Exact (point -> price) per player, so a specific
+                    # candidate's real quoted price can be verified directly
+                    # rather than inferred from the final report number -
+                    # this is the actual money figure users will see.
+                    per_player_point_price: Dict[str, Dict[str, int]] = {}
+                    for o in outcomes:
+                        player_name = str(o.get("description"))
+                        per_player_point_price.setdefault(player_name, {})[str(o.get("point"))] = o.get("price")
+                    logger.debug("%s/%s batter_home_runs: point->price per player=%s", event_label, book_key, per_player_point_price)
                 elif market_key == MARKET_KEY_TOTAL_BASES:
                     side_aliases, our_market, default_line = _TB_SIDE_ALIASES, MARKET_KEY_TOTAL_BASES, _DEFAULT_TB_LINE
                 else:
