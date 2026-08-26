@@ -14,13 +14,17 @@ from odds_monitor.providers.base import OddsProvider
 
 from .context import ParkWeatherProvider
 from .edges import EdgeCandidate, build_hr_edges, build_total_bases_edges, rank_candidates
-from .hot_streak import HotStreakProvider
-from .matchup import MatchupProvider
+from .hot_streak import HeatIndex, HotStreakProvider
+from .hot_streak import LEAGUE_AVG_WOBA as HOT_STREAK_LEAGUE_AVG_WOBA
+from .matchup import LEAGUE_AVG_WOBA as MATCHUP_LEAGUE_AVG_WOBA
+from .matchup import MatchupProfile, MatchupProvider
 from .schedule import ProbableMatchup, ScheduleProvider
 from .scoring import HRScoreResult, TotalBasesScoreResult, compute_hr_score, compute_total_bases_score
 from .statcast import StatcastProvider
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_CANDIDATES = 30
 
 
 @dataclass(frozen=True)
@@ -122,6 +126,37 @@ def _score_matchup_environments(
     return environments
 
 
+def _neutral_matchup(batter_name: str, pitcher_name: str) -> MatchupProfile:
+    """A matchup with no real signal - used as a stand-in during the cheap
+    prefilter pass so `compute_hr_score`/`compute_total_bases_score` can run
+    without yet paying for a real (network-bound) matchup lookup.
+    """
+    return MatchupProfile(
+        batter=batter_name,
+        pitcher=pitcher_name,
+        platoon_woba=MATCHUP_LEAGUE_AVG_WOBA,
+        platoon_pa=0,
+        bvp_pa=0,
+        bvp_hr=0,
+        bvp_avg=0.0,
+        bvp_slg=0.0,
+        pitch_mix_edge=0.0,
+    )
+
+
+def _neutral_heat(batter_name: str) -> HeatIndex:
+    """A 'perfectly average, not hot or cold' HeatIndex - see `_neutral_matchup`."""
+    return HeatIndex(
+        player=batter_name,
+        season_woba=HOT_STREAK_LEAGUE_AVG_WOBA,
+        last7_woba=HOT_STREAK_LEAGUE_AVG_WOBA,
+        last15_woba=HOT_STREAK_LEAGUE_AVG_WOBA,
+        last30_woba=HOT_STREAK_LEAGUE_AVG_WOBA,
+        last15_pa=0,
+        z_score=0.0,
+    )
+
+
 def run_pipeline(
     game_date: date,
     schedule: ScheduleProvider,
@@ -132,6 +167,7 @@ def run_pipeline(
     odds: OddsProvider,
     extra_batters: Optional[List[str]] = None,
     min_ev_percent: float = 0.0,
+    max_candidates: int = DEFAULT_MAX_CANDIDATES,
 ) -> SlateReport:
     slate = schedule.get_slate(game_date)
     if not slate:
@@ -140,13 +176,17 @@ def run_pipeline(
     batter_context = _resolve_batters(slate, extra_batters)
     environments = _score_matchup_environments(slate, statcast, park_weather)
 
-    hr_scores: List[HRScoreResult] = []
-    tb_scores: List[TotalBasesScoreResult] = []
-    heat_indices = []
-    event_lookup: Dict[str, str] = {}
-
+    # Phase 1 - cheap prefilter: Statcast batter/pitcher profiles and park/
+    # weather all come from a season leaderboard fetched *once* and cached
+    # (see PybaseballStatcastProvider), so scoring every roster batter with
+    # neutral matchup/hot-streak inputs is fast even across a full slate.
+    # Real matchup and hot-streak data cost a network round trip *per
+    # player* on the real providers though, so we only pay for those on the
+    # `max_candidates` most promising batters by this cheap pass - not
+    # every batter on every active roster (which can be 150-250+ players).
+    # Each entry: (prefilter_score, batter_name, ctx, BatterProfile, PitcherProfile, park_ctx)
+    prelim: List[tuple] = []
     for batter_name, ctx in batter_context.items():
-        event_lookup[batter_name] = ctx["event"]
         batter = statcast.batter_profile(batter_name)
         if batter is None:
             logger.warning("Skipping %s - no Statcast batter profile available", batter_name)
@@ -159,6 +199,30 @@ def run_pipeline(
             continue
 
         park_ctx = park_weather.get_context(ctx["park"])
+        neutral_matchup = _neutral_matchup(batter_name, pitcher.player)
+        neutral_heat = _neutral_heat(batter_name)
+        prelim_hr = compute_hr_score(batter, pitcher, neutral_matchup, park_ctx, neutral_heat)
+        prelim_tb = compute_total_bases_score(batter, pitcher, neutral_matchup, park_ctx, neutral_heat)
+        prelim.append((max(prelim_hr.score, prelim_tb.score), batter_name, ctx, batter, pitcher, park_ctx))
+
+    prelim.sort(key=lambda c: c[0], reverse=True)
+    candidates = prelim[:max_candidates]
+    if len(prelim) > max_candidates:
+        logger.info(
+            "Prefiltered %d batters down to the top %d by cheap Statcast-only score before running "
+            "real matchup/hot-streak lookups",
+            len(prelim),
+            max_candidates,
+        )
+
+    # Phase 2 - full score: only for the prefiltered candidates.
+    hr_scores: List[HRScoreResult] = []
+    tb_scores: List[TotalBasesScoreResult] = []
+    heat_indices: List[HeatIndex] = []
+    event_lookup: Dict[str, str] = {}
+
+    for _, batter_name, ctx, batter, pitcher, park_ctx in candidates:
+        event_lookup[batter_name] = ctx["event"]
         heat = hot_streak.get_heat_index(batter_name, as_of=game_date)
         heat_indices.append(heat)
         matchup = matchup_provider.get_matchup(
