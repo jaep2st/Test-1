@@ -1,0 +1,95 @@
+"""Renders a `SlateReport` as readable console text: best matchups, who's
+hot, top home run props, and top 2+ total bases props.
+"""
+
+from __future__ import annotations
+
+from typing import List
+
+from .edges import EdgeCandidate
+from .pipeline import MatchupEnvironment, SlateReport
+
+
+def _fmt_pct(x: float) -> str:
+    return f"{x * 100:.1f}%"
+
+
+def _truncate(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def render_matchup_environments(environments: List[MatchupEnvironment], top: int = 10) -> str:
+    lines = ["## Best HR Matchups on the Slate", ""]
+    if not environments:
+        lines.append("(no games found)")
+        return "\n".join(lines)
+    lines.append(f"{'Matchup':<34} {'Park':<22} {'Env':>6} {'ParkHR':>7} {'Wx':>7}")
+    for env in environments[:top]:
+        m = env.matchup
+        matchup_str = _truncate(f"{m.away_team} @ {m.home_team}", 34)
+        lines.append(
+            f"{matchup_str:<34} {_truncate(m.venue, 22):<22} {env.environment_score:>6.1f} "
+            f"{env.park_hr_factor:>6.0f} {env.weather_boost_pct:>+6.1f}%"
+        )
+    return "\n".join(lines)
+
+
+def render_hot_batters(hot_batters: List, top: int = 10) -> str:
+    lines = ["", "## Who's Hot", ""]
+    if not hot_batters:
+        lines.append("(no batters scored)")
+        return "\n".join(lines)
+    lines.append(f"{'Player':<26} {'Label':<10} {'L15 wOBA':>9} {'Season wOBA':>12} {'Z-score':>8}")
+    for h in hot_batters[:top]:
+        lines.append(f"{h.player:<26} {h.label:<10} {h.last15_woba:>9.3f} {h.season_woba:>12.3f} {h.z_score:>+8.2f}")
+    return "\n".join(lines)
+
+
+def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int) -> str:
+    lines = [f"## {title}", ""]
+    priced = [e for e in edges if e.has_market_data]
+    if not priced:
+        lines.append("(no market prices matched - showing model-only ranking below)" if edges else "(no candidates)")
+        for e in edges[:top]:
+            lines.append(f"  - {e.player} ({e.event}): model score {e.model_score:.0f}/100, est. {_fmt_pct(e.model_prob)}")
+        return "\n".join(lines)
+
+    lines.append(
+        f"{'Player':<20} {'Event':<16} {'Model':>7} {'Best':>7} {'Book':<10} "
+        f"{'MktFair':>8} {'Edge':>7} {'EV(mdl)':>8} {'EV(mkt)':>8} {'Bks':>4}"
+    )
+    for e in priced[:top]:
+        lines.append(
+            f"{_truncate(e.player, 20):<20} {_truncate(e.event, 16):<16} {_fmt_pct(e.model_prob):>7} "
+            f"{e.best_line.odds:>+7d} {e.best_line.sportsbook:<10} "
+            f"{_fmt_pct(e.market_fair_prob):>8} {e.edge_vs_market:>+7.1%} "
+            f"{e.ev_percent_model:>+7.1f}% {e.ev_percent_market:>+7.1f}% {e.books_quoting:>4}"
+        )
+    return "\n".join(lines)
+
+
+def render_hr_props(edges: List[EdgeCandidate], top: int = 15) -> str:
+    return _render_edge_table("Best Home Run Props (+EV, ranked)", edges, top)
+
+
+def render_total_bases_props(edges: List[EdgeCandidate], top: int = 15) -> str:
+    return _render_edge_table("Best 2+ Total Bases Props (+EV, ranked)", edges, top)
+
+
+def render_report(report: SlateReport, top: int = 15) -> str:
+    header = f"# MLB Home Run & 2+ Total Bases Report - {report.game_date.isoformat()}\n"
+    sections = [
+        header,
+        render_matchup_environments(report.matchup_environments),
+        render_hot_batters(report.hot_batters),
+        "",
+        render_hr_props(report.hr_edges, top),
+        "",
+        render_total_bases_props(report.tb_edges, top),
+        "",
+        "---",
+        "Model scores are a transparent heuristic (see mlb_props/scoring.py), not a",
+        "calibrated prediction - cross-check against the market's own no-vig consensus",
+        "(the 'Mkt Fair' column) and your own judgment before betting anything.",
+    ]
+    return "\n".join(sections)
