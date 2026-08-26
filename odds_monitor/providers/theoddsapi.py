@@ -156,6 +156,26 @@ class TheOddsApiProvider(OddsProvider):
                 )
                 if market_key == MARKET_KEY_HOME_RUN:
                     side_aliases, our_market, default_line = _HR_SIDE_ALIASES, MARKET_KEY_HOME_RUN, _DEFAULT_HR_LINE
+                    # Extra diagnostics just for this market: figure out
+                    # whether it's genuinely two-sided (Yes+No per player) -
+                    # find_fair_prices() needs both sides quoted by at least
+                    # one book to compute a no-vig price, and a single-sided
+                    # "anytime" market (only "Yes" quoted) can't be de-vigged
+                    # that way even though every outcome parses fine.
+                    outcomes = market.get("outcomes", []) or []
+                    names_seen = sorted({str(o.get("name")) for o in outcomes})
+                    per_player_sides: Dict[str, set] = {}
+                    for o in outcomes:
+                        per_player_sides.setdefault(str(o.get("description")), set()).add(str(o.get("name")))
+                    two_sided_players = sum(1 for sides in per_player_sides.values() if len(sides) >= 2)
+                    logger.debug(
+                        "%s/%s batter_home_runs: outcome name labels seen=%s | %d/%d players have 2+ distinct sides quoted",
+                        event_label,
+                        book_key,
+                        names_seen,
+                        two_sided_players,
+                        len(per_player_sides),
+                    )
                 elif market_key == MARKET_KEY_TOTAL_BASES:
                     side_aliases, our_market, default_line = _TB_SIDE_ALIASES, MARKET_KEY_TOTAL_BASES, _DEFAULT_TB_LINE
                 else:
