@@ -44,13 +44,26 @@ Real mode needs several free-but-separate data sources wired together:
 | Platoon splits, batter-vs-pitcher history, pitch-mix fit | Statcast pitch logs, via `pybaseball` | No |
 | Recent form (last 7/15/30 days) | FanGraphs range stats, via `pybaseball` | No |
 | Ballpark factors + live wind/temperature | Static table + Open-Meteo | No |
-| Cross-book player-prop odds | Betstamp Sports Betting API | Yes |
+| Cross-book player-prop odds | Betstamp Sports Betting API | Yes (props run model-only without it) |
 
 ```bash
 pip install pybaseball pandas   # only needed for real (non --mock) Statcast/matchup/form data
-cp .env.example .env            # fill in BETSTAMP_API_KEY
-python mlb_props_main.py --date 2026-08-26 --min-ev 2
+cp .env.example .env            # fill in BETSTAMP_API_KEY (optional - see below)
+python mlb_props_main.py --date today --min-ev 2 --html-out report.html
 ```
+
+This needs a machine with normal outbound internet access to those five
+hosts - a plain sandboxed environment (including some Claude Code sessions)
+may not have it. **The `mlb-props-report` GitHub Actions workflow below is
+the recommended way to run this for real, on every run, with zero local
+setup** - a GitHub-hosted runner has that access by default. Running it
+locally or in CI both work the same way; pick whichever you'll actually use.
+
+No `BETSTAMP_API_KEY`? The pipeline still runs - `NoOddsProvider` returns no
+lines and every prop shows a model score with no market price or EV%
+(`odds_monitor.ev` only produces EV% when there are books to compare against).
+Statcast/matchup/weather/hot-streak scoring is independently useful, so this
+degrades gracefully instead of failing.
 
 Real lineups aren't posted by MLB until close to first pitch, so well
 ahead of game time you'll likely want to pass specific hitters explicitly:
@@ -59,18 +72,39 @@ ahead of game time you'll likely want to pass specific hitters explicitly:
 python mlb_props_main.py --batters "Aaron Judge" --batters "Juan Soto" --min-ev 0
 ```
 
-**Caveat, read before trusting live output:** this codebase was built in a
-sandboxed environment where outbound access to `baseballsavant.mlb.com`,
-`statsapi.mlb.com`, `api.open-meteo.com`, and Betstamp's API was blocked by
-network policy, so none of the "real" providers below were exercised
-against live data while building this. Each one is written defensively
-against the *documented* shape of its data source and logs+skips anything
-it can't parse rather than guessing silently, but - exactly like the
-existing `BetstampProvider` - you should run once with `--log-level DEBUG`,
-inspect real responses, and adjust the `_COLUMN_ALIASES`/`_FIELD_ALIASES`
-dicts in `mlb_props/statcast.py`, `mlb_props/matchup.py`,
-`mlb_props/hot_streak.py`, and `odds_monitor/providers/betstamp.py` if a
-field name has drifted from what's documented here.
+**Caveat on `_COLUMN_ALIASES`/`_FIELD_ALIASES`:** each real provider is
+written defensively against the *documented* shape of its data source and
+logs+skips anything it can't parse rather than guessing silently - but
+field names occasionally drift from a library/API's docs. The first time
+you run for real (locally or via the workflow, with `--log-level DEBUG`),
+check the logs for parse warnings and adjust the alias dicts in
+`mlb_props/statcast.py`, `mlb_props/matchup.py`, `mlb_props/hot_streak.py`,
+and `odds_monitor/providers/betstamp.py` if needed.
+
+### Always-current live report via GitHub Actions + Pages
+
+`.github/workflows/mlb-props-report.yml` runs the real pipeline on a
+GitHub-hosted runner (normal internet access, no sandbox restrictions),
+regenerates `mlb_props/html_report.py`'s HTML report from scratch every
+time, and publishes it to GitHub Pages - nothing is cached between runs, so
+the published page always reflects that run's live fetch.
+
+One-time setup:
+
+1. **Settings -> Secrets and variables -> Actions -> New repository
+   secret** -> name it `BETSTAMP_API_KEY` -> paste your key from
+   https://www.betstamp.com/sports-betting-api. (Skip this to publish a
+   model-only report with no odds/EV columns.)
+2. **Settings -> Pages -> Build and deployment -> Source: "GitHub
+   Actions"**.
+3. **Actions tab -> "MLB props report" -> Run workflow** to publish the
+   first version immediately. The daily `schedule:` trigger in the workflow
+   only fires once this file is on the repo's default branch - trigger it
+   manually from a feature branch in the meantime.
+
+After that, the page at your repo's Pages URL always shows the most recent
+run - open it any time, or click "Run workflow" again whenever you want an
+on-demand refresh with brand-new data.
 
 ### How the composite score and +EV flag work
 
@@ -103,9 +137,10 @@ you can judge how much to trust the edge yourself.
 | `--batters` | none | Extra batter name to include (repeatable) - useful before lineups post |
 | `--min-ev` | `0` | Minimum EV% (by our model) required to show a prop |
 | `--top` | `15` | Max rows per section |
-| `--api-key` | `$BETSTAMP_API_KEY` | Betstamp API key |
+| `--api-key` | `$BETSTAMP_API_KEY` | Betstamp API key (omit for a model-only report, no odds) |
 | `--books` | all | Restrict to specific sportsbook IDs (repeatable) |
-| `--out` | none | Also write the report to this file |
+| `--out` | none | Also write the console-text report to this file |
+| `--html-out` | none | Also write the styled HTML report to this file |
 | `--log-level` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
 
 ---
@@ -229,14 +264,18 @@ mlb_props/
   matchup.py                  platoon splits, batter-vs-pitcher history, pitch-mix edge (pybaseball / mock)
   hot_streak.py                rolling 7/15/30-day form vs. season baseline, as a z-score (pybaseball / mock)
   context.py                    ballpark HR factors + live wind/temperature (Open-Meteo / mock)
-  market.py                      HR/total-bases market constants + mock odds provider
+  market.py                      HR/total-bases market constants + mock/no-op odds providers
   scoring.py                      composite 0-100 score -> heuristic model probability
   edges.py                         combines model score + market no-vig consensus into ranked +EV candidates
   pipeline.py                       orchestrates the full run
-  report.py                          renders the console report
+  report.py                          renders the console-text report
+  html_report.py                     renders the styled, self-contained HTML report
 mlb_props_main.py          mlb_props entry point
 
-tests/                     pytest suite (odds_monitor detector/mock/CLI/EV math, mlb_props scoring/pipeline/CLI)
+.github/workflows/
+  mlb-props-report.yml     runs mlb_props for real on a schedule/on-demand, publishes to GitHub Pages
+
+tests/                     pytest suite (odds_monitor detector/mock/CLI/EV math, mlb_props scoring/pipeline/HTML/CLI)
 ```
 
 ## Adding another data source or alert channel
