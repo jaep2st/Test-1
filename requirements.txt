@@ -1,2 +1,7 @@
 requests>=2.31
 python-dotenv>=1.0
+
+# Optional - only needed for real (non --mock) MLB Statcast/matchup/hot-streak
+# data in mlb_props/. Not required for odds_monitor or for `--mock` runs.
+# pybaseball>=2.2.7
+# pandas>=2.0

@@ -1,0 +1,131 @@
+from mlb_props.context import MockParkWeatherProvider
+from mlb_props.hot_streak import MockHotStreakProvider
+from mlb_props.matchup import MockMatchupProvider
+from mlb_props.scoring import compute_hr_score, compute_total_bases_score
+from mlb_props.statcast import BatterProfile, PitcherProfile
+
+
+def _elite_batter():
+    return BatterProfile(
+        player="Elite Slugger",
+        team="NYY",
+        bats="R",
+        pa=550,
+        ab=480,
+        hr=45,
+        barrel_pct=20.0,
+        hard_hit_pct=55.0,
+        avg_exit_velo=94.5,
+        avg_launch_angle=18.0,
+        sweet_spot_pct=42.0,
+        pull_air_pct=44.0,
+        hr_fb_pct=30.0,
+        iso=0.300,
+        xwoba=0.420,
+        xslg=0.630,
+    )
+
+
+def _weak_batter():
+    return BatterProfile(
+        player="Weak Contact Hitter",
+        team="MIA",
+        bats="L",
+        pa=400,
+        ab=360,
+        hr=4,
+        barrel_pct=4.0,
+        hard_hit_pct=30.0,
+        avg_exit_velo=86.0,
+        avg_launch_angle=8.0,
+        sweet_spot_pct=24.0,
+        pull_air_pct=14.0,
+        hr_fb_pct=7.0,
+        iso=0.110,
+        xwoba=0.300,
+        xslg=0.370,
+    )
+
+
+def _bad_pitcher():
+    return PitcherProfile(
+        player="Gopher Ball Guy",
+        team="COL",
+        throws="R",
+        ip=90.0,
+        barrel_pct_allowed=11.0,
+        hard_hit_pct_allowed=45.0,
+        avg_exit_velo_allowed=91.0,
+        hr_per_9=2.0,
+        hr_fb_pct_allowed=17.0,
+        xwoba_allowed=0.355,
+        xslg_allowed=0.460,
+        pitch_mix={"FF": 0.5, "SL": 0.3, "CH": 0.2},
+    )
+
+
+def _good_pitcher():
+    return PitcherProfile(
+        player="Ace Righty",
+        team="SD",
+        throws="R",
+        ip=140.0,
+        barrel_pct_allowed=4.0,
+        hard_hit_pct_allowed=29.0,
+        avg_exit_velo_allowed=86.5,
+        hr_per_9=0.7,
+        hr_fb_pct_allowed=6.5,
+        xwoba_allowed=0.285,
+        xslg_allowed=0.365,
+        pitch_mix={"FF": 0.4, "SL": 0.35, "CU": 0.25},
+    )
+
+
+def test_elite_batter_vs_bad_pitcher_scores_higher_than_weak_batter_vs_good_pitcher():
+    park = MockParkWeatherProvider(seed=1).get_context("Coors Field")
+    heat = MockHotStreakProvider(seed=1).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=1).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+
+    good_result = compute_hr_score(_elite_batter(), _bad_pitcher(), matchup, park, heat)
+
+    park2 = MockParkWeatherProvider(seed=1).get_context("Oracle Park")
+    heat2 = MockHotStreakProvider(seed=1).get_heat_index("Weak Contact Hitter")
+    matchup2 = MockMatchupProvider(seed=1).get_matchup("Weak Contact Hitter", "L", "Ace Righty", "R", {})
+    bad_result = compute_hr_score(_weak_batter(), _good_pitcher(), matchup2, park2, heat2)
+
+    assert good_result.score > bad_result.score
+    assert good_result.model_prob > bad_result.model_prob
+
+
+def test_hr_model_prob_stays_within_calibrated_bounds():
+    park = MockParkWeatherProvider(seed=2).get_context("Coors Field")
+    heat = MockHotStreakProvider(seed=2).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=2).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+    result = compute_hr_score(_elite_batter(), _bad_pitcher(), matchup, park, heat)
+    assert 0.0 < result.model_prob <= 0.30
+
+
+def test_total_bases_score_favors_higher_iso_and_slg():
+    park = MockParkWeatherProvider(seed=3).get_context("Yankee Stadium")
+    heat = MockHotStreakProvider(seed=3).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=3).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+    good = compute_total_bases_score(_elite_batter(), _bad_pitcher(), matchup, park, heat)
+
+    park2 = MockParkWeatherProvider(seed=3).get_context("Yankee Stadium")
+    heat2 = MockHotStreakProvider(seed=3).get_heat_index("Weak Contact Hitter")
+    matchup2 = MockMatchupProvider(seed=3).get_matchup("Weak Contact Hitter", "L", "Gopher Ball Guy", "R", {})
+    bad = compute_total_bases_score(_weak_batter(), _bad_pitcher(), matchup2, park2, heat2)
+
+    assert good.score > bad.score
+    assert good.model_prob > bad.model_prob
+
+
+def test_score_components_sum_to_the_overall_score():
+    from mlb_props.scoring import HR_WEIGHTS
+
+    park = MockParkWeatherProvider(seed=4).get_context("Fenway Park")
+    heat = MockHotStreakProvider(seed=4).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=4).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+    result = compute_hr_score(_elite_batter(), _bad_pitcher(), matchup, park, heat)
+    recomputed = sum(result.components[k] * w for k, w in HR_WEIGHTS.items())
+    assert round(recomputed, 1) == result.score

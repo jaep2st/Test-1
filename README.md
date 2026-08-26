@@ -1,12 +1,116 @@
-# Odds Discrepancy Monitor
+# Odds Discrepancy Monitor + MLB Home Run / 2+ Total Bases Finder
 
-Watches player-prop lines (points, assists, rebounds, etc.) across
-sportsbooks and alerts you whenever the same prop's line differs by 2 or
-more points between books - a signal worth a closer look for +EV or
-middling opportunities.
+Two tools sharing one odds pipeline:
 
-Pipeline: **fetch** lines from a provider -> **detect** cross-book gaps ->
-**notify** you (console, Discord, and/or email).
+- **`odds_monitor`** (`main.py`) - watches player-prop lines (points,
+  assists, rebounds, etc.) across sportsbooks and alerts you whenever the
+  same prop's line differs by 2+ points between books.
+- **`mlb_props`** (`mlb_props_main.py`) - a daily MLB report that ranks the
+  best home run and 2+ total bases props on the slate. It combines Statcast
+  batted-ball quality (barrel%, hard-hit%, exit velocity, launch angle,
+  xwOBA/xSLG), platoon splits, batter-vs-pitcher history, pitch-mix fit,
+  recent hot/cold form, ballpark factors and live wind/temperature into a
+  composite score per player, then cross-checks that score against real
+  cross-book odds (via the same no-vig EV math) to surface +EV spots and
+  flag cross-book price discrepancies worth line-shopping.
+
+Pipeline: **fetch** lines from a provider -> **detect** cross-book gaps (or,
+for `mlb_props`, **compute** a no-vig fair price and **score** every batter)
+-> **notify**/**report**.
+
+## MLB props quick start (no API key needed)
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# Synthetic slate, Statcast profiles, matchups, and odds end-to-end:
+python mlb_props_main.py --mock --mock-seed 1
+```
+
+This prints four sections: the slate's best HR-friendly matchups (park +
+weather + opposing pitcher vulnerability), who's hot right now, the
+top-ranked home run props, and the top-ranked 2+ total bases props - each
+ranked by expected value against the best price actually on the market.
+
+### Running it for real
+
+Real mode needs several free-but-separate data sources wired together:
+
+| Data | Source | Needs a key? |
+|---|---|---|
+| Today's slate + probable pitchers | MLB Stats API (`statsapi.mlb.com`) | No |
+| Barrel%, hard-hit%, exit velo, launch angle, xwOBA/xSLG | Baseball Savant, via `pybaseball` | No |
+| Platoon splits, batter-vs-pitcher history, pitch-mix fit | Statcast pitch logs, via `pybaseball` | No |
+| Recent form (last 7/15/30 days) | FanGraphs range stats, via `pybaseball` | No |
+| Ballpark factors + live wind/temperature | Static table + Open-Meteo | No |
+| Cross-book player-prop odds | Betstamp Sports Betting API | Yes |
+
+```bash
+pip install pybaseball pandas   # only needed for real (non --mock) Statcast/matchup/form data
+cp .env.example .env            # fill in BETSTAMP_API_KEY
+python mlb_props_main.py --date 2026-08-26 --min-ev 2
+```
+
+Real lineups aren't posted by MLB until close to first pitch, so well
+ahead of game time you'll likely want to pass specific hitters explicitly:
+
+```bash
+python mlb_props_main.py --batters "Aaron Judge" --batters "Juan Soto" --min-ev 0
+```
+
+**Caveat, read before trusting live output:** this codebase was built in a
+sandboxed environment where outbound access to `baseballsavant.mlb.com`,
+`statsapi.mlb.com`, `api.open-meteo.com`, and Betstamp's API was blocked by
+network policy, so none of the "real" providers below were exercised
+against live data while building this. Each one is written defensively
+against the *documented* shape of its data source and logs+skips anything
+it can't parse rather than guessing silently, but - exactly like the
+existing `BetstampProvider` - you should run once with `--log-level DEBUG`,
+inspect real responses, and adjust the `_COLUMN_ALIASES`/`_FIELD_ALIASES`
+dicts in `mlb_props/statcast.py`, `mlb_props/matchup.py`,
+`mlb_props/hot_streak.py`, and `odds_monitor/providers/betstamp.py` if a
+field name has drifted from what's documented here.
+
+### How the composite score and +EV flag work
+
+`mlb_props/scoring.py` weights each factor (see `HR_WEIGHTS` /
+`TB_WEIGHTS` there for exact numbers) into a transparent 0-100 score, then
+maps that score onto a heuristic model probability calibrated to realistic
+MLB base rates (~10% average HR-per-game, ~42% average 2+ total-bases
+game). That's **not** a trained/calibrated model - it's a directional
+estimate you cross-check against the market. Two independent signals drive
+the ranking:
+
+1. **Model edge**: does our score say this player's HR/2+TB probability is
+   higher than what the best available price actually pays for?
+2. **Market edge**: regardless of our model, is one book's price
+   meaningfully better than the no-vig consensus price across all books
+   quoting it (classic line-shopping value, via `odds_monitor/ev.py`)?
+
+A prop flagged by both is the strongest kind of spot. Every row in the
+report shows both EV%s plus the number of books used for the consensus, so
+you can judge how much to trust the edge yourself.
+
+### MLB props CLI options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--date` | today | Slate date, `YYYY-MM-DD` |
+| `--year` | slate date's year | Season year for Statcast lookups |
+| `--mock` | off | Synthetic data end-to-end, no API key/network |
+| `--mock-seed` | random | Seed for reproducible `--mock` output |
+| `--batters` | none | Extra batter name to include (repeatable) - useful before lineups post |
+| `--min-ev` | `0` | Minimum EV% (by our model) required to show a prop |
+| `--top` | `15` | Max rows per section |
+| `--api-key` | `$BETSTAMP_API_KEY` | Betstamp API key |
+| `--books` | all | Restrict to specific sportsbook IDs (repeatable) |
+| `--out` | none | Also write the report to this file |
+| `--log-level` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
+
+---
+
+# Odds Discrepancy Monitor (`odds_monitor`)
 
 ## Why Betstamp via its API, not scraping
 
@@ -115,17 +219,37 @@ odds_monitor/
     email_notifier.py        sends via SMTP
   scheduler.py              run_once / run_forever loop
   cli.py                    argument parsing and wiring
-main.py                    entry point
-tests/                     pytest suite (detector, mock provider, CLI)
+  ev.py                     American<->decimal/prob odds math + no-vig fair pricing (shared with mlb_props)
+main.py                    odds_monitor entry point
+
+mlb_props/
+  schedule.py               today's slate + probable pitchers (MLB Stats API / mock)
+  statcast.py                batter/pitcher batted-ball quality: barrel%, hard-hit%, exit velo,
+                              launch angle, xwOBA/xSLG (pybaseball / mock)
+  matchup.py                  platoon splits, batter-vs-pitcher history, pitch-mix edge (pybaseball / mock)
+  hot_streak.py                rolling 7/15/30-day form vs. season baseline, as a z-score (pybaseball / mock)
+  context.py                    ballpark HR factors + live wind/temperature (Open-Meteo / mock)
+  market.py                      HR/total-bases market constants + mock odds provider
+  scoring.py                      composite 0-100 score -> heuristic model probability
+  edges.py                         combines model score + market no-vig consensus into ranked +EV candidates
+  pipeline.py                       orchestrates the full run
+  report.py                          renders the console report
+mlb_props_main.py          mlb_props entry point
+
+tests/                     pytest suite (odds_monitor detector/mock/CLI/EV math, mlb_props scoring/pipeline/CLI)
 ```
 
 ## Adding another data source or alert channel
 
 - New data source: implement `OddsProvider.fetch_player_props(league) ->
   List[PropLine]` (see `providers/mock.py` for the simplest example) and
-  wire it up in `cli.py`.
+  wire it up in `cli.py` (or `mlb_props_main.py`'s `build_providers`).
 - New alert channel: implement `Notifier.notify(discrepancies)` (see
   `notifiers/console.py`) and add it to `build_notifiers` in `cli.py`.
+- New `mlb_props` signal: each factor (Statcast, matchup, hot streak,
+  park/weather) is its own small provider interface with a `Pybaseball*`/
+  `Live*` implementation and a `Mock*` implementation - follow that pattern,
+  then fold it into `scoring.py`'s weights.
 
 ## Tests
 
