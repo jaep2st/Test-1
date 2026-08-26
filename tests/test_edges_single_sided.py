@@ -67,6 +67,26 @@ def test_single_sided_hr_market_still_produces_a_priced_edge():
     assert edge.books_quoting == 1
 
 
+def test_single_sided_fallback_ignores_a_longer_shot_multi_HR_line():
+    # Confirmed live (run #13): a real book posts multiple point values
+    # under the exact same market/side ("Over 0.5", "Over 1.5" HRs, both
+    # outcome name "Over") - picking "best price" across all of them used
+    # to silently swap in the far-less-likely 2+ HR line's payout (huge
+    # odds) instead of the standard 1+ HR line actually being scored.
+    scores = [_hr_score()]
+    lines = [
+        _single_sided_hr_line(odds=350, book="betrivers"),  # standard 1+ HR (line=0.5)
+        PropLine(
+            player="Aaron Judge", team=None, league="mlb", market=MARKET_HOME_RUN, side="yes",
+            line=1.5, odds=19900, sportsbook="betrivers", event="Houston Astros @ New York Yankees",
+        ),  # a longer-shot 2+ HR line - must NOT be picked
+    ]
+    edges = build_hr_edges(scores, find_fair_prices(lines), lines, event_lookup={})
+
+    assert edges[0].best_line.odds == 350
+    assert edges[0].best_line.line == 0.5
+
+
 def test_single_sided_fallback_picks_the_best_priced_book():
     scores = [_hr_score()]
     lines = [

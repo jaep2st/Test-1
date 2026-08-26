@@ -27,6 +27,7 @@ from odds_monitor.providers.base import OddsProvider
 MARKET_HOME_RUN = "batter_home_runs"  # two-way: "yes" / "no", to hit a home run
 MARKET_TOTAL_BASES = "batter_total_bases"  # two-way: "over" / "under" a line (2+ bases = line 1.5)
 TOTAL_BASES_LINE_FOR_2PLUS = 1.5
+HOME_RUN_LINE_FOR_1PLUS = 0.5  # the standard "hits a HR" line, as opposed to a longer-shot "2+ HRs" (1.5) etc.
 
 _BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "espnbet", "fanatics"]
 

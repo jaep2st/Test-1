@@ -165,17 +165,27 @@ class TheOddsApiProvider(OddsProvider):
                     outcomes = market.get("outcomes", []) or []
                     names_seen = sorted({str(o.get("name")) for o in outcomes})
                     per_player_sides: Dict[str, set] = {}
+                    per_player_points: Dict[str, set] = {}
                     for o in outcomes:
-                        per_player_sides.setdefault(str(o.get("description")), set()).add(str(o.get("name")))
+                        player_name = str(o.get("description"))
+                        per_player_sides.setdefault(player_name, set()).add(str(o.get("name")))
+                        per_player_points.setdefault(player_name, set()).add(o.get("point"))
                     two_sided_players = sum(1 for sides in per_player_sides.values() if len(sides) >= 2)
+                    multi_line_players = sum(1 for points in per_player_points.values() if len(points) >= 2)
                     logger.debug(
-                        "%s/%s batter_home_runs: outcome name labels seen=%s | %d/%d players have 2+ distinct sides quoted",
+                        "%s/%s batter_home_runs: outcome name labels seen=%s | %d/%d players have 2+ distinct "
+                        "sides quoted | %d/%d players have 2+ distinct point/line values quoted",
                         event_label,
                         book_key,
                         names_seen,
                         two_sided_players,
                         len(per_player_sides),
+                        multi_line_players,
+                        len(per_player_points),
                     )
+                    if multi_line_players:
+                        sample = next((k, v) for k, v in per_player_points.items() if len(v) >= 2)
+                        logger.debug("%s/%s batter_home_runs: sample multi-line player %r has points=%s", event_label, book_key, *sample)
                 elif market_key == MARKET_KEY_TOTAL_BASES:
                     side_aliases, our_market, default_line = _TB_SIDE_ALIASES, MARKET_KEY_TOTAL_BASES, _DEFAULT_TB_LINE
                 else:
