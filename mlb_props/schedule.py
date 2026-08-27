@@ -52,9 +52,14 @@ class MlbStatsApiScheduleProvider(ScheduleProvider):
     """
 
     def __init__(self, session=None, timeout: float = 10.0, include_rosters: bool = True, max_batters_per_team: int = 9):
-        import requests
+        from odds_monitor.http_utils import build_retrying_session
 
-        self.session = session or requests.Session()
+        # Retries transient connection failures (see that module's
+        # docstring - confirmed live against The Odds API) instead of
+        # dropping the whole slate on one dropped connection. Only applied
+        # when no session is injected, so tests supplying a fake session
+        # are unaffected.
+        self.session = session or build_retrying_session()
         self.timeout = timeout
         self.include_rosters = include_rosters
         # The roster endpoint doesn't indicate batting order or who's

@@ -78,10 +78,17 @@ jobs:
           BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
         run: |
           mkdir -p public
+          # --max-candidates raised from the CLI default of 30: a real run
+          # against a full slate (2026-08-27T03:29 UTC) completed in ~32s
+          # at 30 candidates, so there's ample headroom in this job's
+          # runtime to score more of the slate's roster before the cheap
+          # phase-1 prefilter cuts anyone off - broader coverage, same
+          # per-run cost profile.
           python mlb_props_main.py \
             --date "${{ inputs.date || 'today' }}" \
             --min-ev "${{ inputs.min_ev || '0' }}" \
             --top 25 \
+            --max-candidates 60 \
             --html-out public/index.html \
             --out public/report.txt \
             --log-level DEBUG
