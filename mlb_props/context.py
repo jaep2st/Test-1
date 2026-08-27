@@ -51,9 +51,29 @@ PARK_HR_FACTORS: Dict[str, float] = {
     "Nationals Park": 99,
     "Citi Field": 96,
     "Angel Stadium": 100,
-    "Oakland Coliseum": 89,
     "Rogers Centre": 105,
     "George M. Steinbrenner Field": 95,
+    # Confirmed live via web search (2026-08-27): the Rays are back at
+    # Tropicana Field for the 2026 season after playing all of 2025 at
+    # Steinbrenner Field while Hurricane Milton's roof damage was repaired
+    # (ESPN: "Rays to return to Tropicana Field in '26 after hurricane
+    # repairs", home opener April 6, 2026). Tropicana Field was missing
+    # from this table entirely, so any Rays home game would have silently
+    # fallen back to a neutral 100 park factor instead of the fixed dome's
+    # real (pitcher-friendly) one. 96 matches its typical modern rolling
+    # factor; refresh from FanGraphs/Statcast once 2026 games are in.
+    "Tropicana Field": 96,
+    # Confirmed live via web search (2026-08-27): the Athletics play their
+    # 2025-2027 home games at Sutter Health Park in West Sacramento (a
+    # ~14,000-seat Triple-A park with notably short fences), not Oakland
+    # Coliseum (kept below only as a historical fallback - it's stale for
+    # any current A's game). No established multi-year rolling HR factor
+    # exists yet for this park; 128 reflects public reporting of its small
+    # dimensions playing very hitter-friendly in 2025 - treat as a rougher
+    # estimate than the other entries here and refresh once more seasons
+    # of data exist.
+    "Sutter Health Park": 128,
+    "Oakland Coliseum": 89,  # historical - the Athletics no longer play here (see Sutter Health Park above)
 }
 
 # Roughly the home-plate lat/lon and orientation (degrees, home->CF compass
@@ -72,9 +92,27 @@ PARK_COORDS: Dict[str, Tuple[float, float, float]] = {
     "Citi Field": (40.7571, -73.8458, 30),
     "Camden Yards": (39.2839, -76.6218, 30),
     # Not exhaustive - falls back to no weather adjustment if a park is missing.
+    # Sutter Health Park (the Athletics' real 2026 home - see
+    # PARK_HR_FACTORS above) is deliberately NOT added here: its home-plate
+    # coordinates are well-established (38.5804, -121.5138, confirmed live
+    # via web search), but no verified center-field compass bearing was
+    # found for it, and shipping a guessed bearing risks silently flipping
+    # "wind out" to "wind in" for every game there - worse than the honest
+    # zero-wind-effect fallback this park already gets by being absent here.
 }
 
-DOME_PARKS = {"Minute Maid Park", "Rogers Centre", "American Family Field", "Chase Field", "loanDepot park", "Globe Life Field"}
+DOME_PARKS = {
+    "Minute Maid Park",
+    "Rogers Centre",
+    "American Family Field",
+    "Chase Field",
+    "loanDepot park",
+    "Globe Life Field",
+    # Fixed (non-retractable) dome; confirmed live via web search
+    # (2026-08-27) the Rays are back here for the 2026 season - see
+    # PARK_HR_FACTORS above.
+    "Tropicana Field",
+}
 
 
 @dataclass(frozen=True)
@@ -101,9 +139,14 @@ class LiveParkWeatherProvider(ParkWeatherProvider):
     """
 
     def __init__(self, session=None, timeout: float = 10.0):
-        import requests
+        from odds_monitor.http_utils import build_retrying_session
 
-        self.session = session or requests.Session()
+        # Retries transient connection failures (see that module's
+        # docstring - confirmed live against The Odds API) instead of
+        # dropping weather data for a park on one dropped connection. Only
+        # applied when no session is injected, so tests supplying a fake
+        # session are unaffected.
+        self.session = session or build_retrying_session()
         self.timeout = timeout
 
     def get_context(self, park: str) -> ParkWeatherContext:

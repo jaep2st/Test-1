@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from ..http_utils import build_retrying_session
 from ..models import PropLine
 from .base import OddsProvider
 
@@ -72,7 +73,11 @@ class BetstampProvider(OddsProvider):
         self.book_ids = book_ids
         self.include_alts = include_alts
         self.timeout = timeout
-        self.session = session or requests.Session()
+        # See odds_monitor/http_utils.py's docstring: retries transient
+        # connection failures instead of dropping the whole run's market
+        # data on the first hiccup. Only applied when no session is
+        # injected, so tests supplying a fake session are unaffected.
+        self.session = session or build_retrying_session()
 
     def fetch_player_props(self, league: str) -> List[PropLine]:
         params: Dict[str, Any] = {

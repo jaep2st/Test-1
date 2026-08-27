@@ -38,6 +38,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from ..http_utils import build_retrying_session
 from ..models import PropLine
 from .base import OddsProvider
 
@@ -92,7 +93,11 @@ class TheOddsApiProvider(OddsProvider):
         self.regions = regions
         self.books = set(b.lower() for b in books) if books else None
         self.timeout = timeout
-        self.session = session or requests.Session()
+        # See odds_monitor/http_utils.py's docstring: retries transient
+        # connection failures instead of dropping the whole run's market
+        # data on the first hiccup. Only applied when no session is
+        # injected, so tests supplying a fake session are unaffected.
+        self.session = session or build_retrying_session()
 
     def fetch_player_props(self, league: str) -> List[PropLine]:
         sport_key = _SPORT_KEYS.get(league.lower())
