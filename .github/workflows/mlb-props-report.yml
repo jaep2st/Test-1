@@ -36,9 +36,16 @@ on:
         required: false
         default: "0"
   schedule:
-    # 15:00 UTC daily (~11am ET / 8am PT) - after probable pitchers are
-    # typically posted, well before first pitch. Adjust to taste.
+    # Twice daily, timed around the US MLB slate (adjust to taste - both
+    # are UTC, since GitHub Actions schedule: doesn't support local time):
+    # 15:00 UTC (~11am ET / 8am PT) - after probable pitchers are typically
+    # posted, well before first pitch. Good for the day's early model-only
+    # read before real odds exist yet.
     - cron: "0 15 * * *"
+    # 22:30 UTC (~6:30pm ET / 3:30pm PT) - mid-slate, right around when the
+    # bulk of evening games start and books have posted real player-prop
+    # boards for the day - the highest-market-coverage check of the two.
+    - cron: "30 22 * * *"
 
 permissions:
   contents: read
