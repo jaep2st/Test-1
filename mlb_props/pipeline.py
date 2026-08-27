@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Dict, List, Optional
 
 from odds_monitor.ev import find_fair_prices
@@ -82,6 +82,40 @@ def _resolve_batters(slate: List[ProbableMatchup], extra_batters: Optional[List[
                 park=fallback_game.venue,
             )
     return out
+
+
+def _log_slate_time_span(slate: List[ProbableMatchup]) -> None:
+    """Logs the day's earliest and latest first-pitch times (UTC), parsed
+    from each game's real `game_time_utc` (MLB Stats API's `gameDate`
+    field - an ISO8601 UTC timestamp, e.g. '2026-08-27T23:05:00Z').
+
+    Not surfaced in the rendered report itself (a table of scored props has
+    no natural place for a single slate-wide fact) - this is specifically
+    for external schedulers/log-readers that need to know "when does today's
+    slate start/end" without re-deriving it from the full matchup list, e.g.
+    timing a check for "an hour before first pitch" or "the middle of the
+    slate" (which both vary daily and can't be expressed as a fixed cron
+    time without this).
+    """
+    times: List[datetime] = []
+    for game in slate:
+        if not game.game_time_utc:
+            continue
+        try:
+            times.append(datetime.fromisoformat(game.game_time_utc.replace("Z", "+00:00")))
+        except ValueError:
+            logger.warning("Could not parse game_time_utc %r for %s @ %s", game.game_time_utc, game.away_team, game.home_team)
+    if not times:
+        logger.warning("SLATE_TIME_SPAN: no parseable game times on today's slate (%d games)", len(slate))
+        return
+    first, last = min(times), max(times)
+    logger.info(
+        "SLATE_TIME_SPAN first_pitch_utc=%s last_pitch_utc=%s games_with_times=%d/%d",
+        first.isoformat(),
+        last.isoformat(),
+        len(times),
+        len(slate),
+    )
 
 
 def _score_matchup_environments(
@@ -172,6 +206,8 @@ def run_pipeline(
     slate = schedule.get_slate(game_date)
     if not slate:
         logger.warning("No games found on the slate for %s", game_date)
+    else:
+        _log_slate_time_span(slate)
 
     batter_context = _resolve_batters(slate, extra_batters)
     environments = _score_matchup_environments(slate, statcast, park_weather)
