@@ -19,6 +19,12 @@ class PropLine:
     sportsbook: str  # e.g. "draftkings", "fanduel"
     event: str  # e.g. "LAL @ BOS"
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # True when this line was fetched for a game already underway at fetch
+    # time. Providers that can tell (see TheOddsApiProvider's
+    # `include_live` param) set this so a caller can keep live lines out of
+    # any comparison against a pregame-only model - see that provider's
+    # module docstring for why that comparison is invalid.
+    is_live: bool = False
 
     @property
     def key(self) -> Tuple[str, str, str, str, str]:

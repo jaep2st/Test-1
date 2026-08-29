@@ -133,7 +133,14 @@ class TheOddsApiProvider(OddsProvider):
         # injected, so tests supplying a fake session are unaffected.
         self.session = session or build_retrying_session()
 
-    def fetch_player_props(self, league: str) -> List[PropLine]:
+    def fetch_player_props(self, league: str, include_live: bool = False) -> List[PropLine]:
+        """`include_live=True` fetches already-started games too (tagged
+        `PropLine.is_live=True`) instead of skipping them - see this
+        module's docstring for why the default (False) excludes them from
+        the normal pipeline. Intended for a standalone live-odds scan (see
+        `mlb_props_main.py`'s `--live-odds-scan`), never for the main
+        model-comparison report.
+        """
         sport_key = _SPORT_KEYS.get(league.lower())
         if sport_key is None:
             logger.warning("TheOddsApiProvider has no sport-key mapping for league %r - returning no lines", league)
@@ -170,19 +177,21 @@ class TheOddsApiProvider(OddsProvider):
             # a real mispricing). Skip odds entirely for anything already
             # underway rather than silently mixing pregame and live prices
             # in the same ranked table.
+            is_live = False
             commence_time = event.get("commence_time")
             if commence_time:
                 try:
                     starts_at = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
-                    if starts_at <= now:
-                        skipped_live += 1
-                        logger.info(
-                            "Skipping odds for %s - already started at %s (live in-game prices aren't "
-                            "comparable to this model's pregame-only estimate)", event_label, commence_time,
-                        )
-                        continue
+                    is_live = starts_at <= now
                 except ValueError:
                     logger.warning("Could not parse commence_time %r for %s - fetching odds anyway", commence_time, event_label)
+            if is_live and not include_live:
+                skipped_live += 1
+                logger.info(
+                    "Skipping odds for %s - already started at %s (live in-game prices aren't "
+                    "comparable to this model's pregame-only estimate)", event_label, commence_time,
+                )
+                continue
             attempted += 1
             try:
                 payload = self._get(
@@ -197,7 +206,7 @@ class TheOddsApiProvider(OddsProvider):
                 failed += 1
                 logger.warning("Failed to fetch odds for event %r (%s) - skipping this game", event_id, event_label, exc_info=True)
                 continue
-            lines.extend(self._parse_event_odds(payload, league, event_label))
+            lines.extend(self._parse_event_odds(payload, league, event_label, is_live=is_live))
 
         # Every single per-event request failing (with at least one
         # attempted) is a systemic problem - confirmed live: a real run hit
@@ -238,7 +247,7 @@ class TheOddsApiProvider(OddsProvider):
         response.raise_for_status()
         return response.json()
 
-    def _parse_event_odds(self, payload: Dict[str, Any], league: str, event_label: str) -> List[PropLine]:
+    def _parse_event_odds(self, payload: Dict[str, Any], league: str, event_label: str, is_live: bool = False) -> List[PropLine]:
         lines: List[PropLine] = []
         bookmakers = (payload or {}).get("bookmakers", []) or []
         if not bookmakers:
@@ -304,7 +313,9 @@ class TheOddsApiProvider(OddsProvider):
                 for outcome in market.get("outcomes", []) or []:
                     try:
                         lines.append(
-                            self._parse_outcome(outcome, side_aliases, our_market, default_line, book_key, league, event_label)
+                            self._parse_outcome(
+                                outcome, side_aliases, our_market, default_line, book_key, league, event_label, is_live
+                            )
                         )
                     except (KeyError, TypeError, ValueError) as exc:
                         logger.warning("Skipping unparsable outcome on %s/%s: %s (%r)", book_key, market_key, exc, outcome)
@@ -319,6 +330,7 @@ class TheOddsApiProvider(OddsProvider):
         book_key: str,
         league: str,
         event_label: str,
+        is_live: bool = False,
     ) -> PropLine:
         player = outcome.get("description")
         if not player:
@@ -340,4 +352,5 @@ class TheOddsApiProvider(OddsProvider):
             odds=int(price),
             sportsbook=book_key,
             event=event_label,
+            is_live=is_live,
         )

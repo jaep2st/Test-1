@@ -241,6 +241,41 @@ def test_all_events_already_started_returns_empty_without_raising():
     assert provider.fetch_player_props("mlb") == []
 
 
+def test_include_live_fetches_and_tags_started_games():
+    # include_live=True is the opt-in path for a standalone live-odds scan
+    # (mlb_props_main.py's --live-odds-scan) - the default (False, tested
+    # above) stays skip-and-exclude for the main model-comparison report.
+    import datetime as dt
+
+    past = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    events_payload = [
+        {"id": "live_evt", "home_team": "A", "away_team": "B", "commence_time": past},
+        {"id": "upcoming_evt", "home_team": "C", "away_team": "D", "commence_time": future},
+    ]
+    odds_payload = {
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "batter_home_runs",
+                        "outcomes": [{"name": "Yes", "description": "Player X", "price": 300}],
+                    }
+                ],
+            }
+        ]
+    }
+    provider = _provider({"/events": events_payload, "/live_evt/odds": odds_payload, "/upcoming_evt/odds": odds_payload})
+
+    lines = provider.fetch_player_props("mlb", include_live=True)
+
+    assert len(lines) == 2
+    by_event = {line.event: line for line in lines}
+    assert by_event["B @ A"].is_live is True
+    assert by_event["D @ C"].is_live is False
+
+
 def test_unparsable_commence_time_still_attempts_fetch():
     # Defensive: a malformed/missing commence_time shouldn't silently drop a
     # game - fall back to fetching its odds rather than skipping it blind.
