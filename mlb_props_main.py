@@ -31,6 +31,7 @@ import os
 import sys
 from datetime import date, datetime
 from typing import List, Optional, Sequence
+from zoneinfo import ZoneInfo
 
 try:
     from dotenv import load_dotenv
@@ -56,9 +57,21 @@ from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider,
 logger = logging.getLogger(__name__)
 
 
+# MLB is a US league; the slate's "today" is the US Eastern calendar day,
+# not whatever timezone the machine running this happens to be in. Confirmed
+# live: a manual run at 2026-08-28 20:22 ET (2026-08-29 00:22 UTC) against
+# the naive `date.today()` pulled the *next* day's slate instead of that
+# evening's - the GitHub Actions runner's OS clock is UTC, which rolls to
+# the next calendar date at 8pm ET (EDT) / 7pm ET (EST), hours before that
+# evening's games are anywhere near over. Anchoring to America/New_York
+# keeps `--date today` meaning what a bettor means by "today" regardless of
+# the runner's own timezone.
+_MLB_TZ = ZoneInfo("America/New_York")
+
+
 def _parse_date(value: str) -> date:
     if value == "today":
-        return date.today()
+        return datetime.now(_MLB_TZ).date()
     return datetime.strptime(value, "%Y-%m-%d").date()
 
 
