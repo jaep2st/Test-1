@@ -44,6 +44,19 @@ from .base import OddsProvider
 
 logger = logging.getLogger(__name__)
 
+
+class OddsFetchFailed(Exception):
+    """Raised when every per-event odds request in a fetch failed - a
+    systemic problem (auth/quota exhaustion, an outage) as opposed to a
+    legitimately empty market (a game with no props posted yet, which
+    returns an empty list, not this exception). Callers that want to fall
+    back to a different odds provider on a real failure (see
+    odds_monitor/providers/fallback.py) should catch this specifically;
+    anything else (a genuinely empty slate, a per-game parsing hiccup)
+    still degrades to an empty list exactly as before.
+    """
+
+
 DEFAULT_BASE_URL = "https://api.the-odds-api.com/v4"
 
 # Maps this pipeline's generic league string to The Odds API's sport key.
@@ -107,11 +120,13 @@ class TheOddsApiProvider(OddsProvider):
 
         try:
             events = self._get(f"/sports/{sport_key}/events", {})
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to fetch %s event list from The Odds API", league)
-            return []
+            raise OddsFetchFailed(f"Failed to fetch {league} event list: {exc}") from exc
 
         lines: List[PropLine] = []
+        attempted = 0
+        failed = 0
         for event in events or []:
             event_id = event.get("id")
             home_team = event.get("home_team")
@@ -119,6 +134,7 @@ class TheOddsApiProvider(OddsProvider):
             if not event_id or not home_team or not away_team:
                 continue
             event_label = f"{away_team} @ {home_team}"
+            attempted += 1
             try:
                 payload = self._get(
                     f"/sports/{sport_key}/events/{event_id}/odds",
@@ -129,9 +145,25 @@ class TheOddsApiProvider(OddsProvider):
                     },
                 )
             except Exception:
+                failed += 1
                 logger.warning("Failed to fetch odds for event %r (%s) - skipping this game", event_id, event_label, exc_info=True)
                 continue
             lines.extend(self._parse_event_odds(payload, league, event_label))
+
+        # Every single per-event request failing (with at least one
+        # attempted) is a systemic problem - confirmed live: a real run hit
+        # 401 Unauthorized on all 17 event-odds calls in a row while the
+        # free /events call itself succeeded, consistent with a free-tier
+        # credit quota running out mid-day. A slate with 0 games (an
+        # off-day) or a handful of per-game hiccups among mostly-successful
+        # calls both still degrade to whatever partial lines were gathered,
+        # same as before - only total failure raises, so a caller wanting a
+        # fallback provider (see fallback.py) can catch this specifically.
+        if attempted and failed == attempted:
+            raise OddsFetchFailed(
+                f"All {attempted} event-odds requests failed for {league} - likely an API auth/quota "
+                "problem, not an empty market. See the per-event WARNING logs above for the underlying errors."
+            )
         return lines
 
     def _get(self, path: str, params: Dict[str, Any]) -> Any:

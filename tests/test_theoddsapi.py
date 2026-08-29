@@ -1,4 +1,6 @@
-from odds_monitor.providers.theoddsapi import TheOddsApiProvider
+import pytest
+
+from odds_monitor.providers.theoddsapi import OddsFetchFailed, TheOddsApiProvider
 
 
 class _FakeResponse:
@@ -12,10 +14,24 @@ class _FakeResponse:
         return self._payload
 
 
+class _UnauthorizedResponse:
+    """Stands in for a real 401 from The Odds API - raise_for_status()
+    raises, same as requests.Response does for a 4xx/5xx status.
+    """
+
+    def raise_for_status(self):
+        raise Exception("401 Client Error: Unauthorized")
+
+    def json(self):
+        raise AssertionError("json() should never be reached - raise_for_status() should raise first")
+
+
 class _FakeSession:
     """Stubs the two real-world calls TheOddsApiProvider makes: the events
     list, then one per-event odds fetch. Keyed by the request path so a
-    single fake session can serve a whole `fetch_player_props` call.
+    single fake session can serve a whole `fetch_player_props` call. A
+    response value of None (instead of a payload dict) serves an
+    `_UnauthorizedResponse` for that path, to simulate a real API failure.
     """
 
     def __init__(self, responses):
@@ -26,7 +42,7 @@ class _FakeSession:
         self.requested_params.append((url, params))
         for path_suffix, payload in self.responses.items():
             if url.endswith(path_suffix):
-                return _FakeResponse(payload)
+                return _UnauthorizedResponse() if payload is None else _FakeResponse(payload)
         raise AssertionError(f"Unexpected URL requested: {url}")
 
 
@@ -140,3 +156,60 @@ def test_missing_api_key_raises_value_error(monkeypatch):
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_all_events_failing_raises_odds_fetch_failed():
+    # Confirmed live (2026-08-29): a real run hit 401 on all 17 per-event
+    # odds calls in a row while /events itself succeeded - a systemic
+    # problem (quota/auth), not an empty market. That distinction is what
+    # lets a caller fall back to a second odds provider instead of quietly
+    # reporting "no props" - see odds_monitor/providers/fallback.py.
+    events_payload = [
+        {"id": "evt1", "home_team": "A", "away_team": "B"},
+        {"id": "evt2", "home_team": "C", "away_team": "D"},
+    ]
+    provider = _provider({"/events": events_payload, "/evt1/odds": None, "/evt2/odds": None})
+
+    with pytest.raises(OddsFetchFailed):
+        provider.fetch_player_props("mlb")
+
+
+def test_events_list_itself_failing_raises_odds_fetch_failed():
+    provider = _provider({"/events": None})
+
+    with pytest.raises(OddsFetchFailed):
+        provider.fetch_player_props("mlb")
+
+
+def test_a_genuinely_empty_slate_does_not_raise():
+    # No games today is not a failure - distinct from every event's odds
+    # call failing.
+    provider = _provider({"/events": []})
+    assert provider.fetch_player_props("mlb") == []
+
+
+def test_partial_per_event_failure_still_returns_what_succeeded():
+    events_payload = [
+        {"id": "evt1", "home_team": "A", "away_team": "B"},
+        {"id": "evt2", "home_team": "C", "away_team": "D"},
+    ]
+    odds_payload = {
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "batter_home_runs",
+                        "outcomes": [{"name": "Yes", "description": "Player X", "price": 300}],
+                    }
+                ],
+            }
+        ]
+    }
+    # evt1 succeeds, evt2 fails - a mix, not total failure, should not raise.
+    provider = _provider({"/events": events_payload, "/evt1/odds": odds_payload, "/evt2/odds": None})
+
+    lines = provider.fetch_player_props("mlb")
+
+    assert len(lines) == 1
+    assert lines[0].player == "Player X"

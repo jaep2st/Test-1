@@ -42,6 +42,7 @@ except ImportError:
 
 from odds_monitor.providers.base import OddsProvider
 from odds_monitor.providers.betstamp import BetstampProvider
+from odds_monitor.providers.fallback import FallbackOddsProvider
 from odds_monitor.providers.theoddsapi import TheOddsApiProvider
 
 from mlb_props.context import LiveParkWeatherProvider, MockParkWeatherProvider, ParkWeatherProvider
@@ -109,12 +110,24 @@ def build_providers(args: argparse.Namespace):
     # The Odds API is the default real-odds source (free tier, self-serve
     # signup, no account approval needed - see odds_monitor/providers/
     # theoddsapi.py). Betstamp stays available as an alternative for anyone
-    # who already has a key for it. Checked in that order; first one with a
-    # key configured wins.
+    # who already has a key for it. When both keys are configured, The Odds
+    # API is tried first but Betstamp now backstops it: confirmed live
+    # (2026-08-29) that a free-tier ODDS_API_KEY can run out of credits
+    # mid-day and return 401 on every event, which used to mean the whole
+    # run silently degraded to model-only rankings even with a second,
+    # working key sitting right there unused. FallbackOddsProvider only
+    # engages on that kind of systemic failure (see its docstring) - a
+    # slate with genuinely no props posted yet still returns empty, same
+    # as always.
     odds_api_key = args.odds_api_key or os.environ.get("ODDS_API_KEY")
     betstamp_key = args.api_key or os.environ.get("BETSTAMP_API_KEY")
-    if odds_api_key:
-        odds: OddsProvider = TheOddsApiProvider(api_key=odds_api_key, books=args.books)
+    if odds_api_key and betstamp_key:
+        odds: OddsProvider = FallbackOddsProvider(
+            primary=TheOddsApiProvider(api_key=odds_api_key, books=args.books),
+            secondary=BetstampProvider(api_key=betstamp_key, book_ids=args.books),
+        )
+    elif odds_api_key:
+        odds = TheOddsApiProvider(api_key=odds_api_key, books=args.books)
     elif betstamp_key:
         odds = BetstampProvider(api_key=betstamp_key, book_ids=args.books)
     else:
