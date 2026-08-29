@@ -110,8 +110,12 @@ def render_total_bases_props(edges: List[EdgeCandidate], top: int = 15) -> str:
     return _render_edge_table("Best 2+ Total Bases Props (+EV, ranked)", edges, top)
 
 
+def render_hits_props(edges: List[EdgeCandidate], top: int = 15) -> str:
+    return _render_edge_table("Best 1+ Hits Props (+EV, ranked)", edges, top)
+
+
 def render_report(report: SlateReport, top: int = 15) -> str:
-    header = f"# MLB Home Run & 2+ Total Bases Report - {report.game_date.isoformat()}\n"
+    header = f"# MLB Home Run, 2+ Total Bases & 1+ Hits Report - {report.game_date.isoformat()}\n"
     sections = [
         header,
         render_matchup_environments(report.matchup_environments),
@@ -120,6 +124,8 @@ def render_report(report: SlateReport, top: int = 15) -> str:
         render_hr_props(report.hr_edges, top),
         "",
         render_total_bases_props(report.tb_edges, top),
+        "",
+        render_hits_props(report.hits_edges, top),
         "",
         "---",
         "Model scores are a transparent heuristic (see mlb_props/scoring.py), not a",

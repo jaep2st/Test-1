@@ -26,8 +26,10 @@ from odds_monitor.providers.base import OddsProvider
 
 MARKET_HOME_RUN = "batter_home_runs"  # two-way: "yes" / "no", to hit a home run
 MARKET_TOTAL_BASES = "batter_total_bases"  # two-way: "over" / "under" a line (2+ bases = line 1.5)
+MARKET_HITS = "batter_hits"  # two-way: "over" / "under" a line (1+ hit = line 0.5)
 TOTAL_BASES_LINE_FOR_2PLUS = 1.5
 HOME_RUN_LINE_FOR_1PLUS = 0.5  # the standard "hits a HR" line, as opposed to a longer-shot "2+ HRs" (1.5) etc.
+HITS_LINE_FOR_1PLUS = 0.5  # the standard "gets a hit" line, as opposed to a longer-shot "2+ hits" (1.5) etc.
 
 _BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "espnbet", "fanatics"]
 
@@ -83,10 +85,12 @@ class MockMlbPropsOddsProvider(OddsProvider):
             event = self.events_by_batter.get(batter, "MLB Game")
             true_hr_prob = self._rng.uniform(0.05, 0.20)
             true_tb_prob = self._rng.uniform(0.32, 0.58)
+            true_hits_prob = self._rng.uniform(0.55, 0.78)
 
             for market, true_prob, side_names in (
                 (MARKET_HOME_RUN, true_hr_prob, ("yes", "no")),
                 (MARKET_TOTAL_BASES, true_tb_prob, ("over", "under")),
+                (MARKET_HITS, true_hits_prob, ("over", "under")),
             ):
                 books = self._rng.sample(_BOOKS, k=self._rng.randint(4, len(_BOOKS)))
                 outlier_book = self._rng.choice(books) if self._rng.random() < self.outlier_chance else None

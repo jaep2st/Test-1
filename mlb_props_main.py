@@ -207,7 +207,7 @@ def run_live_odds_scan(odds_api_key: str, books: Optional[List[str]]) -> str:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Find +EV MLB home run and 2+ total bases props using Statcast quality-of-contact, "
+        description="Find +EV MLB home run, 2+ total bases, and 1+ hits props using Statcast quality-of-contact, "
         "matchup/platoon/pitch-mix edges, recent form, ballpark/weather, and cross-book odds."
     )
     parser.add_argument("--date", dest="game_date", default="today", type=_parse_date, help="Slate date, YYYY-MM-DD (default: today).")

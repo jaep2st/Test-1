@@ -8,9 +8,9 @@ appear in the report at all.
 from odds_monitor.ev import find_fair_prices
 from odds_monitor.models import PropLine
 
-from mlb_props.edges import build_hr_edges, build_total_bases_edges
-from mlb_props.market import MARKET_HOME_RUN, MARKET_TOTAL_BASES
-from mlb_props.scoring import HRScoreResult, TotalBasesScoreResult
+from mlb_props.edges import build_hits_edges, build_hr_edges, build_total_bases_edges
+from mlb_props.market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
+from mlb_props.scoring import HitsScoreResult, HRScoreResult, TotalBasesScoreResult
 
 
 def _hr_score(player="Aaron Judge", model_prob=0.15):
@@ -133,3 +133,54 @@ def test_total_bases_single_sided_fallback_too():
     assert edges[0].has_market_data
     assert edges[0].market_fair_prob is None
     assert edges[0].ev_percent_model is not None
+
+
+def _hits_score(player="Aaron Judge", model_prob=0.65):
+    return HitsScoreResult(
+        player=player,
+        score=55.0,
+        model_prob=model_prob,
+        components={},
+        park="Yankee Stadium",
+        wind_out_mph=5.0,
+        temp_f=75.0,
+        is_dome=False,
+        weather_boost_pct=2.0,
+    )
+
+
+def test_hits_two_sided_market_produces_a_devigged_fair_price():
+    lines = [
+        PropLine(
+            player="Aaron Judge", team=None, league="mlb", market=MARKET_HITS, side="over",
+            line=0.5, odds=-140, sportsbook="draftkings", event="Houston Astros @ New York Yankees",
+        ),
+        PropLine(
+            player="Aaron Judge", team=None, league="mlb", market=MARKET_HITS, side="under",
+            line=0.5, odds=110, sportsbook="draftkings", event="Houston Astros @ New York Yankees",
+        ),
+    ]
+    edges = build_hits_edges([_hits_score()], find_fair_prices(lines), lines, event_lookup={})
+
+    assert edges[0].has_market_data
+    assert edges[0].market_fair_prob is not None
+    assert edges[0].ev_percent_market is not None
+
+
+def test_hits_single_sided_fallback():
+    lines = [
+        PropLine(
+            player="Aaron Judge", team=None, league="mlb", market=MARKET_HITS, side="over",
+            line=0.5, odds=-135, sportsbook="betrivers", event="Houston Astros @ New York Yankees",
+        )
+    ]
+    edges = build_hits_edges([_hits_score()], find_fair_prices(lines), lines, event_lookup={})
+    assert edges[0].has_market_data
+    assert edges[0].market_fair_prob is None
+    assert edges[0].ev_percent_model is not None
+
+
+def test_hits_no_price_falls_back_to_model_only():
+    edges = build_hits_edges([_hits_score()], [], [], event_lookup={})
+    assert not edges[0].has_market_data
+    assert edges[0].best_line is None

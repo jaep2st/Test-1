@@ -40,6 +40,7 @@ def test_pipeline_runs_end_to_end_and_scores_every_slate_batter():
     assert report.hot_batters
     assert report.hr_edges
     assert report.tb_edges
+    assert report.hits_edges
 
 
 def test_matchup_environments_are_sorted_best_first():
@@ -68,9 +69,17 @@ def test_report_renders_without_error_and_mentions_key_sections():
     assert "Who's Hot" in text
     assert "Best Home Run Props" in text
     assert "Best 2+ Total Bases Props" in text
+    assert "Best 1+ Hits Props" in text
 
 
 def test_pipeline_is_deterministic_with_same_seed():
     report_a = _run(seed=42)
     report_b = _run(seed=42)
     assert [e.player for e in report_a.hr_edges] == [e.player for e in report_b.hr_edges]
+
+
+def test_hits_edges_all_have_model_ev_at_or_above_min_when_priced():
+    report = _run(min_ev_percent=0.0)
+    for edge in report.hits_edges:
+        if edge.has_market_data:
+            assert edge.ev_percent_model >= 0.0

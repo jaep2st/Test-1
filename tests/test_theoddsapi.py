@@ -145,6 +145,35 @@ def test_unparsable_outcomes_are_skipped_not_raised():
     assert lines[0].player == "Player Y"
 
 
+def test_parses_hits_market_outcomes():
+    events_payload = [{"id": "evt1", "home_team": "New York Yankees", "away_team": "Houston Astros"}]
+    odds_payload = {
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "batter_hits",
+                        "outcomes": [
+                            {"name": "Over", "description": "Aaron Judge", "point": 0.5, "price": -145},
+                            {"name": "Under", "description": "Aaron Judge", "point": 0.5, "price": 115},
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+    provider = _provider({"/events": events_payload, "/evt1/odds": odds_payload})
+
+    lines = provider.fetch_player_props("mlb")
+
+    assert len(lines) == 2
+    hits_over = next(l for l in lines if l.market == "batter_hits" and l.side == "over")
+    assert hits_over.player == "Aaron Judge"
+    assert hits_over.line == 0.5
+    assert hits_over.odds == -145
+
+
 def test_unknown_league_returns_no_lines_without_network_call():
     provider = _provider({})
     assert provider.fetch_player_props("nba") == []
@@ -339,6 +368,16 @@ class _QuotaHeaderSession:
 
     def get(self, url, params=None, timeout=None):
         return _FakeResponse([], headers={"x-requests-remaining": "437", "x-requests-used": "63"})
+
+
+def test_requests_all_three_markets_per_event():
+    events_payload = [{"id": "evt1", "home_team": "A", "away_team": "B"}]
+    provider = _provider({"/events": events_payload, "/evt1/odds": {"bookmakers": []}})
+
+    provider.fetch_player_props("mlb")
+
+    _, params = provider.session.requested_params[1]  # [0] is the /events call
+    assert params["markets"] == "batter_home_runs,batter_total_bases,batter_hits"
 
 
 def test_quota_headers_are_logged_on_the_free_events_call(caplog):

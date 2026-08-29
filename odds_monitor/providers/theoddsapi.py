@@ -11,9 +11,10 @@ Two calls per league fetch:
 2. `GET /v4/sports/{sport_key}/events/{event_id}/odds` per event - the
    actual player-prop odds. This one costs credits (roughly
    `markets_requested x regions_requested` per call per their pricing docs),
-   so this provider deliberately requests only the two markets this pipeline
-   uses and a single region ("us") to keep a full MLB slate (~15 games/day)
-   well within the free tier.
+   so this provider deliberately requests only the three markets this
+   pipeline uses (home runs, total bases, hits) and a single region ("us")
+   to keep a full MLB slate (~15 games/day) affordable even on a modest
+   paid plan.
 
 NOTE ON FIELD NAMES: this is written against the schema documented at
 https://the-odds-api.com/liveapi/guides/v4/#get-event-odds - each
@@ -76,10 +77,11 @@ DEFAULT_BASE_URL = "https://api.the-odds-api.com/v4"
 # Maps this pipeline's generic league string to The Odds API's sport key.
 _SPORT_KEYS: Dict[str, str] = {"mlb": "baseball_mlb"}
 
-# The Odds API's real, documented market keys for these two props (see
+# The Odds API's real, documented market keys for these props (see
 # https://the-odds-api.com/sports-odds-data/betting-markets.html).
 MARKET_KEY_HOME_RUN = "batter_home_runs"
 MARKET_KEY_TOTAL_BASES = "batter_total_bases"
+MARKET_KEY_HITS = "batter_hits"
 
 # Normalizes whatever outcome label a book uses onto the "yes"/"no" or
 # "over"/"under" sides this pipeline's edges/ev code expects (see
@@ -87,9 +89,11 @@ MARKET_KEY_TOTAL_BASES = "batter_total_bases"
 # home-run prop as Yes/No, others as Over/Under 0.5.
 _HR_SIDE_ALIASES = {"yes": "yes", "over": "yes", "no": "no", "under": "no"}
 _TB_SIDE_ALIASES = {"over": "over", "under": "under"}
+_HITS_SIDE_ALIASES = {"over": "over", "under": "under"}
 
 _DEFAULT_HR_LINE = 0.5
 _DEFAULT_TB_LINE = 1.5
+_DEFAULT_HITS_LINE = 0.5
 
 
 class TheOddsApiProvider(OddsProvider):
@@ -198,7 +202,7 @@ class TheOddsApiProvider(OddsProvider):
                     f"/sports/{sport_key}/events/{event_id}/odds",
                     {
                         "regions": self.regions,
-                        "markets": f"{MARKET_KEY_HOME_RUN},{MARKET_KEY_TOTAL_BASES}",
+                        "markets": f"{MARKET_KEY_HOME_RUN},{MARKET_KEY_TOTAL_BASES},{MARKET_KEY_HITS}",
                         "oddsFormat": "american",
                     },
                 )
@@ -308,6 +312,8 @@ class TheOddsApiProvider(OddsProvider):
                     logger.debug("%s/%s batter_home_runs: point->price per player=%s", event_label, book_key, per_player_point_price)
                 elif market_key == MARKET_KEY_TOTAL_BASES:
                     side_aliases, our_market, default_line = _TB_SIDE_ALIASES, MARKET_KEY_TOTAL_BASES, _DEFAULT_TB_LINE
+                elif market_key == MARKET_KEY_HITS:
+                    side_aliases, our_market, default_line = _HITS_SIDE_ALIASES, MARKET_KEY_HITS, _DEFAULT_HITS_LINE
                 else:
                     continue
                 for outcome in market.get("outcomes", []) or []:

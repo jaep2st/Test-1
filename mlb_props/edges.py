@@ -44,8 +44,15 @@ from typing import Dict, List, Optional
 from odds_monitor.ev import FairPrice, american_to_decimal, model_ev_percent
 from odds_monitor.models import PropLine
 
-from .market import HOME_RUN_LINE_FOR_1PLUS, MARKET_HOME_RUN, MARKET_TOTAL_BASES, TOTAL_BASES_LINE_FOR_2PLUS
-from .scoring import HRScoreResult, TotalBasesScoreResult
+from .market import (
+    HITS_LINE_FOR_1PLUS,
+    HOME_RUN_LINE_FOR_1PLUS,
+    MARKET_HITS,
+    MARKET_HOME_RUN,
+    MARKET_TOTAL_BASES,
+    TOTAL_BASES_LINE_FOR_2PLUS,
+)
+from .scoring import HitsScoreResult, HRScoreResult, TotalBasesScoreResult
 
 
 @dataclass(frozen=True)
@@ -210,6 +217,12 @@ def build_total_bases_edges(
     scores: List[TotalBasesScoreResult], fair_prices: List[FairPrice], lines: List[PropLine], event_lookup: Dict[str, str]
 ) -> List[EdgeCandidate]:
     return _build_edges(scores, MARKET_TOTAL_BASES, "over", TOTAL_BASES_LINE_FOR_2PLUS, fair_prices, lines, event_lookup)
+
+
+def build_hits_edges(
+    scores: List[HitsScoreResult], fair_prices: List[FairPrice], lines: List[PropLine], event_lookup: Dict[str, str]
+) -> List[EdgeCandidate]:
+    return _build_edges(scores, MARKET_HITS, "over", HITS_LINE_FOR_1PLUS, fair_prices, lines, event_lookup)
 
 
 def rank_candidates(candidates: List[EdgeCandidate], min_ev_percent: float = 0.0) -> List[EdgeCandidate]:

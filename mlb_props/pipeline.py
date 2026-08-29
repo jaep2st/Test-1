@@ -13,13 +13,20 @@ from odds_monitor.ev import find_fair_prices
 from odds_monitor.providers.base import OddsProvider
 
 from .context import ParkWeatherProvider
-from .edges import EdgeCandidate, build_hr_edges, build_total_bases_edges, rank_candidates
+from .edges import EdgeCandidate, build_hits_edges, build_hr_edges, build_total_bases_edges, rank_candidates
 from .hot_streak import HeatIndex, HotStreakProvider
 from .hot_streak import LEAGUE_AVG_WOBA as HOT_STREAK_LEAGUE_AVG_WOBA
 from .matchup import LEAGUE_AVG_WOBA as MATCHUP_LEAGUE_AVG_WOBA
 from .matchup import MatchupProfile, MatchupProvider
 from .schedule import ProbableMatchup, ScheduleProvider
-from .scoring import HRScoreResult, TotalBasesScoreResult, compute_hr_score, compute_total_bases_score
+from .scoring import (
+    HitsScoreResult,
+    HRScoreResult,
+    TotalBasesScoreResult,
+    compute_hits_score,
+    compute_hr_score,
+    compute_total_bases_score,
+)
 from .statcast import StatcastProvider
 
 logger = logging.getLogger(__name__)
@@ -49,6 +56,7 @@ class SlateReport:
     hot_batters: List
     hr_edges: List[EdgeCandidate]
     tb_edges: List[EdgeCandidate]
+    hits_edges: List[EdgeCandidate]
 
 
 def _resolve_batters(slate: List[ProbableMatchup], extra_batters: Optional[List[str]]) -> Dict[str, dict]:
@@ -254,6 +262,7 @@ def run_pipeline(
     # Phase 2 - full score: only for the prefiltered candidates.
     hr_scores: List[HRScoreResult] = []
     tb_scores: List[TotalBasesScoreResult] = []
+    hits_scores: List[HitsScoreResult] = []
     heat_indices: List[HeatIndex] = []
     event_lookup: Dict[str, str] = {}
 
@@ -271,8 +280,10 @@ def run_pipeline(
 
         hr_result = compute_hr_score(batter, pitcher, matchup, park_ctx, heat)
         tb_result = compute_total_bases_score(batter, pitcher, matchup, park_ctx, heat)
+        hits_result = compute_hits_score(batter, pitcher, matchup, park_ctx, heat)
         hr_scores.append(hr_result)
         tb_scores.append(tb_result)
+        hits_scores.append(hits_result)
 
         # Full component breakdown for every scored candidate - not shown
         # in the report itself (too dense for a ranked table), but useful
@@ -281,7 +292,7 @@ def run_pipeline(
         # --log-level DEBUG, and printed with a stable "CANDIDATE_DETAIL"
         # prefix so it's easy to grep out of a run's logs.
         logger.info(
-            "CANDIDATE_DETAIL %s vs %s (%s) | %s | %s | %s | HR components=%s | TB components=%s",
+            "CANDIDATE_DETAIL %s vs %s (%s) | %s | %s | %s | HR components=%s | TB components=%s | Hits components=%s",
             batter_name,
             pitcher.player,
             ctx["event"],
@@ -290,6 +301,7 @@ def run_pipeline(
             matchup,
             hr_result.components,
             tb_result.components,
+            hits_result.components,
         )
         logger.info("CANDIDATE_DETAIL %s heat=%s", batter_name, heat)
 
@@ -302,6 +314,7 @@ def run_pipeline(
 
     hr_edges = rank_candidates(build_hr_edges(hr_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
     tb_edges = rank_candidates(build_total_bases_edges(tb_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
+    hits_edges = rank_candidates(build_hits_edges(hits_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
 
     heat_indices.sort(key=lambda h: h.z_score, reverse=True)
 
@@ -312,4 +325,5 @@ def run_pipeline(
         hot_batters=heat_indices,
         hr_edges=hr_edges,
         tb_edges=tb_edges,
+        hits_edges=hits_edges,
     )
