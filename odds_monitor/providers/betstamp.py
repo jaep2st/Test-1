@@ -6,15 +6,25 @@ an API key sent in the `X-API-KEY` header. Get a key and see the full
 reference at https://www.betstamp.com/sports-betting-api and
 https://www.betstamp.com/docs.
 
-NOTE ON FIELD NAMES: Betstamp's public marketing/docs pages describe the
-endpoint, its query parameters (`league`, `bet_types`, `is_live`,
-`include_alts`, `book_ids`), and the auth header, but not the exact JSON
-response schema per plan/version. This provider is written defensively: for
-each field it tries several plausible key names (see `_FIELD_ALIASES`) and
-skips (with a logged warning) any market entry it can't confidently parse,
-rather than guessing wrong silently. If you have API access, check one real
-response (`fetch_player_props` also accepts logging at DEBUG level) and add
-your exact key names to `_FIELD_ALIASES` if they differ.
+BASE URL: confirmed live (2026-08-29, via Betstamp's own published API docs
+page) as `https://api.pro.betstamp.com` - the "Production Pull API" host
+shown directly against `GET /api/markets`. This was previously a guess
+(`https://api.betstamp.com`, no `.pro` subdomain) that would have silently
+pointed at the wrong host even with a valid key - the response shape is
+confirmed too, a top-level `{"markets": [...]}` object, matching what
+`fetch_player_props` below already expected.
+
+NOTE ON FIELD NAMES: the docs page confirms the endpoint, its query
+parameters (`league`, `bet_types`, `is_live`, `include_alts`, `book_ids`),
+the auth header, the base URL and the top-level response shape above, but
+the individual market objects inside `"markets": [...]` were shown
+collapsed, so the exact per-field key names inside each one are still
+unconfirmed. This provider is written defensively: for each field it tries
+several plausible key names (see `_FIELD_ALIASES`) and skips (with a logged
+warning) any market entry it can't confidently parse, rather than guessing
+wrong silently. If you have API access, check one real response
+(`fetch_player_props` also accepts logging at DEBUG level) and add your
+exact key names to `_FIELD_ALIASES` if they differ.
 """
 
 import logging
@@ -29,7 +39,7 @@ from .base import OddsProvider
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE_URL = "https://api.betstamp.com"
+DEFAULT_BASE_URL = "https://api.pro.betstamp.com"
 MARKETS_PATH = "/api/markets"
 
 _FIELD_ALIASES: Dict[str, Tuple[str, ...]] = {
