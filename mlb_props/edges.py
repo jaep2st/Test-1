@@ -103,11 +103,18 @@ class EdgeCandidate:
         )
 
 
-def _fair_price_lookup(fair_prices: List[FairPrice], market: str, side: str) -> Dict[str, FairPrice]:
+def _fair_price_lookup(fair_prices: List[FairPrice], market: str, side: str, expected_line: float) -> Dict[str, FairPrice]:
+    """Restricted to `expected_line` for the same reason `_single_sided_lookup`
+    below is: `find_fair_prices` now returns one `FairPrice` per real point
+    tier it finds two-sided pricing for (see `odds_monitor.ev._pair_key`'s
+    docstring) - a player can have a real, correctly-devigged fair price for
+    both "1+ hits" (0.5) and "2+ hits" (1.5) at once, and only the standard
+    line this pipeline actually scores should ever surface here.
+    """
     return {
         fp.player.strip().lower(): fp
         for fp in fair_prices
-        if fp.market.lower() == market.lower() and fp.side.lower() == side.lower()
+        if fp.market.lower() == market.lower() and fp.side.lower() == side.lower() and abs(fp.line - expected_line) < 1e-6
     }
 
 
@@ -150,7 +157,7 @@ def _build_edges(
     lines: List[PropLine],
     event_lookup: Dict[str, str],
 ) -> List[EdgeCandidate]:
-    lookup = _fair_price_lookup(fair_prices, market, side)
+    lookup = _fair_price_lookup(fair_prices, market, side, expected_line)
     single_sided = _single_sided_lookup(lines, market, side, expected_line)
     candidates: List[EdgeCandidate] = []
     for result in scores:

@@ -184,3 +184,26 @@ def test_hits_no_price_falls_back_to_model_only():
     edges = build_hits_edges([_hits_score()], [], [], event_lookup={})
     assert not edges[0].has_market_data
     assert edges[0].best_line is None
+
+
+def test_hits_edge_uses_the_standard_line_not_a_longer_shot_tier():
+    # Confirmed live (2026-08-29): a real book posts genuine two-sided
+    # pricing at multiple point tiers (1+ hits AND 2+ hits) - the standard
+    # "1+ hits" (0.5) fair price must win here, not the much-longer-shot
+    # "2+ hits" (1.5) tier's fair price, even though find_fair_prices()
+    # now correctly returns a FairPrice for each tier (see test_ev.py).
+    lines = [
+        PropLine(player="Aaron Judge", team=None, league="mlb", market=MARKET_HITS, side="over",
+                  line=0.5, odds=-165, sportsbook="draftkings", event="e"),
+        PropLine(player="Aaron Judge", team=None, league="mlb", market=MARKET_HITS, side="under",
+                  line=0.5, odds=140, sportsbook="draftkings", event="e"),
+        PropLine(player="Aaron Judge", team=None, league="mlb", market=MARKET_HITS, side="over",
+                  line=1.5, odds=225, sportsbook="draftkings", event="e"),
+        PropLine(player="Aaron Judge", team=None, league="mlb", market=MARKET_HITS, side="under",
+                  line=1.5, odds=-290, sportsbook="draftkings", event="e"),
+    ]
+    edges = build_hits_edges([_hits_score()], find_fair_prices(lines), lines, event_lookup={})
+
+    assert edges[0].best_line.line == 0.5
+    assert edges[0].best_line.odds == -165
+    assert edges[0].market_fair_prob > 0.55

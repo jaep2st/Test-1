@@ -60,6 +60,36 @@ def test_find_fair_prices_flags_best_price_and_computes_ev():
     assert yes_result.ev_percent > 0  # fanduel's price should look like value vs. the devigged consensus
 
 
+def test_find_fair_prices_does_not_pair_different_point_tiers():
+    # Confirmed live (2026-08-29): a real book (DraftKings) posts genuine
+    # two-sided pricing at multiple point tiers under the same market - not
+    # just the standard "1+ hits" (0.5) line, also "2+ hits" (1.5). Before
+    # _pair_key included the point value, all "over" quotes across every
+    # tier got pooled together (same for "under"), so a devig could pair a
+    # 0.5-line Over price against a 1.5-line Under price - two different
+    # bets, not two sides of one - and silently surface the longer-shot
+    # tier's much better payout as if it were the standard line's real
+    # price. Reproduces the exact real symptom: a "1+ hits" fair
+    # probability far below MLB's real ~65-70% base rate.
+    lines = [
+        # Standard 1+ hits line (0.5): genuinely likely (~65%), priced accordingly.
+        _line(sportsbook="draftkings", side="over", line=0.5, odds=-165, market="batter_hits"),
+        _line(sportsbook="draftkings", side="under", line=0.5, odds=140, market="batter_hits"),
+        # Longer-shot 2+ hits line (1.5): genuinely unlikely, priced accordingly.
+        _line(sportsbook="draftkings", side="over", line=1.5, odds=225, market="batter_hits"),
+        _line(sportsbook="draftkings", side="under", line=1.5, odds=-290, market="batter_hits"),
+    ]
+    results = find_fair_prices(lines)
+
+    over_05 = next(r for r in results if r.side == "over" and r.line == 0.5)
+    assert over_05.fair_prob > 0.55  # the real, standard-line fair price - a likely event
+    assert over_05.best_line.odds == -165  # not the 1.5 tier's +225
+
+    over_15 = next(r for r in results if r.side == "over" and r.line == 1.5)
+    assert over_15.fair_prob < 0.35  # the real 2+ hits fair price - an unlikely event
+    assert over_15.best_line.odds == 225
+
+
 def test_find_fair_prices_ignores_single_sided_groups():
     lines = [_line(sportsbook="draftkings", side="yes", odds=-120)]  # no "no" side quoted anywhere
     assert find_fair_prices(lines) == []

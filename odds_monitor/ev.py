@@ -65,6 +65,7 @@ class FairPrice:
     market: str
     side: str
     event: str
+    line: float  # the point value this fair price is for, e.g. 0.5 ("1+ hits") vs. 1.5 ("2+ hits")
     fair_prob: float  # consensus (median across books) no-vig probability
     books_used: int  # how many books had both sides quoted, for the devig
     best_line: PropLine  # the single best price available for this side
@@ -74,11 +75,31 @@ class FairPrice:
     price_spread_percent: float  # gap between best and worst book's implied prob
 
 
-def _pair_key(line: PropLine) -> Tuple[str, str, str, str]:
-    """Same as PropLine.key but without the side, so we can pair over/under
-    (or yes/no) quotes from the same book together for a per-book devig.
+def _pair_key(line: PropLine) -> Tuple[str, str, str, str, float]:
+    """Same as PropLine.key but without the side (so we can pair over/under
+    or yes/no quotes together for a per-book devig) and WITH the point value.
+
+    Confirmed live (2026-08-29): a real book can post several point tiers
+    under the same market with genuine two-sided pricing for each - e.g.
+    DraftKings quoting Over/Under at 0.5, 1.5, *and* 2.5 hits for the same
+    game, not just the standard "1+ hits" line. Without the point value in
+    this key, every tier's "over" quotes (and every tier's "under" quotes)
+    got pooled together as if they were the same bet, so a devig could pair
+    a "0.5" Over price against a "1.5" Under price from a different book -
+    two different bets, not two sides of the same one - and "best price"
+    could silently pick a longer-shot tier's payout over the standard
+    line's real price. Confirmed by a real run producing an obviously wrong
+    signal: a "1+ hits" fair probability of ~33% for an everyday hitter
+    (real MLB base rate is ~65-70%), alongside a +200 "best price" that
+    turned out to be the 2+ hits tier's price mislabeled as the 1+ tier.
     """
-    return (line.player.strip().lower(), line.league.lower(), line.market.lower(), line.event.lower())
+    return (
+        line.player.strip().lower(),
+        line.league.lower(),
+        line.market.lower(),
+        line.event.lower(),
+        round(line.line, 4),
+    )
 
 
 def find_fair_prices(lines: Iterable[PropLine]) -> List[FairPrice]:
@@ -140,6 +161,7 @@ def find_fair_prices(lines: Iterable[PropLine]) -> List[FairPrice]:
                     market=best.market,
                     side=side,
                     event=best.event,
+                    line=best.line,
                     fair_prob=fair_prob,
                     books_used=len(common_books),
                     best_line=best,
