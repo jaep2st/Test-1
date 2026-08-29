@@ -189,6 +189,71 @@ def test_a_genuinely_empty_slate_does_not_raise():
     assert provider.fetch_player_props("mlb") == []
 
 
+def test_already_started_events_are_skipped_entirely():
+    # Confirmed live (2026-08-29): an in-progress game's props get re-priced
+    # off plate-appearances-remaining, not comparable to this model's
+    # pregame-only estimate - fetch_player_props must not even request odds
+    # for it, let alone return lines built from it.
+    import datetime as dt
+
+    past = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    events_payload = [
+        {"id": "live_evt", "home_team": "A", "away_team": "B", "commence_time": past},
+        {"id": "upcoming_evt", "home_team": "C", "away_team": "D", "commence_time": future},
+    ]
+    odds_payload = {
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "batter_home_runs",
+                        "outcomes": [{"name": "Yes", "description": "Player X", "price": 300}],
+                    }
+                ],
+            }
+        ]
+    }
+    provider = _provider({"/events": events_payload, "/upcoming_evt/odds": odds_payload})
+
+    lines = provider.fetch_player_props("mlb")
+
+    # Only the upcoming event's odds were requested at all - the live one
+    # never hit the network.
+    requested_paths = [url for url, _ in provider.session.requested_params]
+    assert not any("live_evt" in p for p in requested_paths)
+    assert any("upcoming_evt" in p for p in requested_paths)
+    assert len(lines) == 1
+    assert lines[0].player == "Player X"
+
+
+def test_all_events_already_started_returns_empty_without_raising():
+    # Every game live is not a systemic failure (no requests even attempted,
+    # let alone failed) - distinct from OddsFetchFailed's "every request we
+    # tried came back an error" case.
+    import datetime as dt
+
+    past = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    events_payload = [{"id": "live_evt", "home_team": "A", "away_team": "B", "commence_time": past}]
+    provider = _provider({"/events": events_payload})
+
+    assert provider.fetch_player_props("mlb") == []
+
+
+def test_unparsable_commence_time_still_attempts_fetch():
+    # Defensive: a malformed/missing commence_time shouldn't silently drop a
+    # game - fall back to fetching its odds rather than skipping it blind.
+    events_payload = [{"id": "evt1", "home_team": "A", "away_team": "B", "commence_time": "not-a-timestamp"}]
+    odds_payload = {"bookmakers": []}
+    provider = _provider({"/events": events_payload, "/evt1/odds": odds_payload})
+
+    provider.fetch_player_props("mlb")
+
+    requested_paths = [url for url, _ in provider.session.requested_params]
+    assert any("evt1" in p for p in requested_paths)
+
+
 def test_partial_per_event_failure_still_returns_what_succeeded():
     events_payload = [
         {"id": "evt1", "home_team": "A", "away_team": "B"},

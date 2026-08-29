@@ -28,12 +28,26 @@ crashing the whole fetch, and both "Yes"/"No" and "Over"/"Under" outcome
 labels are accepted for the home-run market in case books differ. If a
 live run's `--log-level DEBUG` output shows different field names, fix the
 constants/parsing below and this docstring.
+
+ALREADY-STARTED GAMES ARE SKIPPED ENTIRELY: confirmed live (2026-08-29) that
+once a game is underway, books re-price player props in-play - a batter's
+home-run line splits into escalating tiers (0.5/1.5/2.5+ HR) priced off
+however many plate appearances he has left today, and a tier can vanish
+entirely once he's already cleared it (e.g. no more 0.5 line once he's hit
+his first). This model has no live-game-state awareness (no outs/PA-
+remaining tracking) - its probability estimate is only meaningful against a
+pregame price. `fetch_player_props` compares each event's `commence_time`
+to now and skips odds for anything already started, rather than silently
+mixing pregame and live prices in the same ranked table (which previously
+produced nonsense "edges" like +150% EV(mdl) that was really just a live,
+low-PA-remaining line, not a real mispricing).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -134,6 +148,8 @@ class TheOddsApiProvider(OddsProvider):
         lines: List[PropLine] = []
         attempted = 0
         failed = 0
+        skipped_live = 0
+        now = datetime.now(timezone.utc)
         for event in events or []:
             event_id = event.get("id")
             home_team = event.get("home_team")
@@ -141,6 +157,32 @@ class TheOddsApiProvider(OddsProvider):
             if not event_id or not home_team or not away_team:
                 continue
             event_label = f"{away_team} @ {home_team}"
+            # Confirmed live (2026-08-29): a game already in progress gets
+            # re-priced in-play (e.g. a batter's home-run line splitting into
+            # escalating 0.5/1.5/2.5 HR tiers mid-game, or the 0.5 tier
+            # vanishing entirely once he's already hit one and that market
+            # graded), priced off however many plate appearances he has left
+            # today - not a full game. This model has no live-game-state
+            # awareness at all (no outs/PA-remaining tracking), so its
+            # probability estimate is only meaningful against a pregame
+            # price; comparing it to a live-repriced one produces nonsense
+            # "edges" (seen: +150% EV(mdl) that was actually a live line, not
+            # a real mispricing). Skip odds entirely for anything already
+            # underway rather than silently mixing pregame and live prices
+            # in the same ranked table.
+            commence_time = event.get("commence_time")
+            if commence_time:
+                try:
+                    starts_at = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+                    if starts_at <= now:
+                        skipped_live += 1
+                        logger.info(
+                            "Skipping odds for %s - already started at %s (live in-game prices aren't "
+                            "comparable to this model's pregame-only estimate)", event_label, commence_time,
+                        )
+                        continue
+                except ValueError:
+                    logger.warning("Could not parse commence_time %r for %s - fetching odds anyway", commence_time, event_label)
             attempted += 1
             try:
                 payload = self._get(
@@ -170,6 +212,11 @@ class TheOddsApiProvider(OddsProvider):
             raise OddsFetchFailed(
                 f"All {attempted} event-odds requests failed for {league} - likely an API auth/quota "
                 "problem, not an empty market. See the per-event WARNING logs above for the underlying errors."
+            )
+        if skipped_live:
+            logger.info(
+                "Skipped odds for %d already-started %s event(s) this run - see INFO logs above for which",
+                skipped_live, league,
             )
         return lines
 
