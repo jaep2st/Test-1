@@ -177,6 +177,17 @@ class TheOddsApiProvider(OddsProvider):
         full_params = dict(params)
         full_params["apiKey"] = self.api_key
         response = self.session.get(f"{self.base_url}{path}", params=full_params, timeout=self.timeout)
+        # The Odds API returns remaining/used credit counts on every response
+        # (success or failure) via these headers - logging them at INFO here
+        # means the free /events call each run doubles as a quota check,
+        # confirmed live (2026-08-29) after a run exhausted the free tier
+        # with per-event odds calls returning 401 while /events kept
+        # returning 200, with no way to see the actual credit count short of
+        # logging into the dashboard.
+        remaining = response.headers.get("x-requests-remaining")
+        used = response.headers.get("x-requests-used")
+        if remaining is not None or used is not None:
+            logger.info("The Odds API quota after %s: used=%s remaining=%s", path, used, remaining)
         response.raise_for_status()
         return response.json()
 

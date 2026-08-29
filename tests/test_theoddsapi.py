@@ -4,8 +4,9 @@ from odds_monitor.providers.theoddsapi import OddsFetchFailed, TheOddsApiProvide
 
 
 class _FakeResponse:
-    def __init__(self, payload):
+    def __init__(self, payload, headers=None):
         self._payload = payload
+        self.headers = headers or {}
 
     def raise_for_status(self):
         pass
@@ -229,3 +230,27 @@ def test_api_key_from_env_is_also_stripped(monkeypatch):
     monkeypatch.setenv("ODDS_API_KEY", "env-key\n")
     provider = TheOddsApiProvider(session=_FakeSession({}))
     assert provider.api_key == "env-key"
+
+
+class _QuotaHeaderSession:
+    """Stubs just the free /events call, with the quota headers The Odds
+    API attaches to every response (success or failure).
+    """
+
+    def get(self, url, params=None, timeout=None):
+        return _FakeResponse([], headers={"x-requests-remaining": "437", "x-requests-used": "63"})
+
+
+def test_quota_headers_are_logged_on_the_free_events_call(caplog):
+    # Confirmed live (2026-08-29): after a run exhausted the free tier, the
+    # only way to see the actual remaining-credit count was logging into
+    # the dashboard - the free /events call gets hit every run regardless,
+    # so logging these headers here turns it into a built-in quota check.
+    import logging
+
+    provider = TheOddsApiProvider(api_key="test-key", session=_QuotaHeaderSession())
+
+    with caplog.at_level(logging.INFO, logger="odds_monitor.providers.theoddsapi"):
+        provider.fetch_player_props("mlb")
+
+    assert any("used=63 remaining=437" in r.message for r in caplog.records)
