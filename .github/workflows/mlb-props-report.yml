@@ -39,6 +39,11 @@ on:
         description: "Restrict odds to these sportsbook IDs, space-separated (e.g. 'draftkings fanduel betmgm caesars espnbet betrivers'). Leave blank for all books."
         required: false
         default: ""
+      live_odds_scan:
+        description: "Also run --live-odds-scan (checks already-started games' odds for real cross-book price value; printed to this job's log, not the published report)."
+        type: boolean
+        required: false
+        default: false
   schedule:
     # Twice daily, timed around the US MLB slate (adjust to taste - both
     # are UTC, since GitHub Actions schedule: doesn't support local time):
@@ -111,6 +116,26 @@ jobs:
             --html-out public/index.html \
             --out public/report.txt \
             --log-level DEBUG
+
+      - name: Scan live-game odds for real cross-book value
+        if: ${{ inputs.live_odds_scan }}
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BOOKS_INPUT: ${{ inputs.books }}
+        run: |
+          # Separate from the report above on purpose: this model has no
+          # live-game-state awareness, so it never compares its score to a
+          # live line (see odds_monitor/providers/theoddsapi.py) - this
+          # only checks the one thing that's still valid without a model,
+          # real cross-book price gaps on the same live bet. Printed here,
+          # not published to Pages - it's a diagnostic, not a report.
+          BOOKS_ARGS=()
+          if [ -n "$BOOKS_INPUT" ]; then
+            for b in $BOOKS_INPUT; do
+              BOOKS_ARGS+=(--books "$b")
+            done
+          fi
+          python mlb_props_main.py --live-odds-scan "${BOOKS_ARGS[@]}"
 
       - uses: actions/upload-pages-artifact@v3
         with:
