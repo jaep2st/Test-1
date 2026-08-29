@@ -19,6 +19,25 @@ class _FakeResponse:
         return self._payload
 
 
+class _BadRequestResponse:
+    """Stands in for a real 400 Bad Request - e.g. a missing/invalid
+    required query param (book_ids, periods, prop_types - see this
+    module's "REQUIRED PARAMETERS" docstring section).
+    """
+
+    status_code = 400
+    url = "https://api.pro.betstamp.com/api/markets?league=MLB"
+    text = '{"error": "missing required parameter: prop_types"}'
+
+    def raise_for_status(self):
+        import requests
+
+        raise requests.exceptions.HTTPError(f"{self.status_code} Client Error", response=self)
+
+    def json(self):
+        raise AssertionError("json() should never be reached - raise_for_status() should raise first")
+
+
 class _FakeSession:
     def __init__(self, payload):
         self.payload = payload
@@ -27,6 +46,11 @@ class _FakeSession:
     def get(self, url, headers=None, params=None, timeout=None):
         self.requested.append((url, headers, params))
         return _FakeResponse(self.payload)
+
+
+class _FailingSession:
+    def get(self, url, headers=None, params=None, timeout=None):
+        return _BadRequestResponse()
 
 
 def test_default_base_url_matches_betstamps_published_docs():
@@ -45,7 +69,10 @@ def test_requests_confirmed_endpoint_with_api_key_header():
     url, headers, params = session.requested[0]
     assert url == "https://api.pro.betstamp.com/api/markets"
     assert headers["X-API-KEY"] == "test-key"
-    assert params["league"] == "mlb"
+    # Confirmed live: the league enum is uppercase ("MLB") - this pipeline
+    # always calls with lowercase "mlb" internally, so the provider must
+    # upper-case it before sending or every request is rejected.
+    assert params["league"] == "MLB"
 
 
 def test_parses_markets_from_confirmed_response_shape():
@@ -129,3 +156,23 @@ def test_api_key_from_env_is_also_stripped(monkeypatch):
     monkeypatch.setenv("BETSTAMP_API_KEY", "env-key\n")
     provider = BetstampProvider(session=_FakeSession({"markets": []}))
     assert provider.api_key == "env-key"
+
+
+def test_http_error_response_body_is_logged(caplog):
+    # Confirmed live: several required query params' valid values (see
+    # this module's "REQUIRED PARAMETERS" docstring section) aren't known
+    # yet - logging the real response body on failure is what resolves
+    # that from Betstamp's own validation error text, instead of another
+    # guess. A silent status-code-only failure would hide that message.
+    import logging
+
+    import pytest
+    import requests
+
+    provider = BetstampProvider(api_key="test-key", session=_FailingSession())
+
+    with caplog.at_level(logging.WARNING, logger="odds_monitor.providers.betstamp"):
+        with pytest.raises(requests.exceptions.HTTPError):
+            provider.fetch_player_props("mlb")
+
+    assert any("missing required parameter" in r.message for r in caplog.records)

@@ -14,17 +14,43 @@ pointed at the wrong host even with a valid key - the response shape is
 confirmed too, a top-level `{"markets": [...]}` object, matching what
 `fetch_player_props` below already expected.
 
-NOTE ON FIELD NAMES: the docs page confirms the endpoint, its query
-parameters (`league`, `bet_types`, `is_live`, `include_alts`, `book_ids`),
-the auth header, the base URL and the top-level response shape above, but
-the individual market objects inside `"markets": [...]` were shown
-collapsed, so the exact per-field key names inside each one are still
-unconfirmed. This provider is written defensively: for each field it tries
-several plausible key names (see `_FIELD_ALIASES`) and skips (with a logged
-warning) any market entry it can't confidently parse, rather than guessing
-wrong silently. If you have API access, check one real response
-(`fetch_player_props` also accepts logging at DEBUG level) and add your
-exact key names to `_FIELD_ALIASES` if they differ.
+REQUIRED PARAMETERS: confirmed live (2026-08-29, from the same docs page's
+full request schema) that `GET /api/markets` requires FIVE query params,
+not the two this provider originally sent:
+- `league` - array of strings from a fixed enum (e.g. "MLB", "NBA", "NHL",
+  ...) - confirmed uppercase, not the lowercase "mlb" this pipeline passes
+  internally; `fetch_player_props` now upper-cases it before sending.
+- `book_ids` - array of integers (numeric bookmaker IDs, per a
+  "Bookmaker IDs table" the docs page links but doesn't inline).
+- `periods` - array of strings from a fixed enum (FT, ET, 1H, 2H, 1P-3P,
+  1Q-4Q, F1/F3/F5/F7, 1I-9I, 1S/2S, 1R-4R, REG) - which value(s) apply to a
+  full-game MLB anytime-HR/total-bases prop is not yet confirmed.
+- `bet_types` - array of strings (docs example: "moneyline,spread" - a
+  different axis than the specific prop, so this provider's current guess
+  of a single `"player_props"` value is itself unconfirmed).
+- `prop_types` - array of strings (docs example: "touchdowns,first td",
+  per a "Prop types table" the docs page links but doesn't inline) - the
+  values that mean "home runs" / "total bases" for MLB are not yet known.
+
+`book_ids`, `periods`, `bet_types`, and `prop_types`' exact valid values
+were all behind expandable/linked sections not visible in the page content
+seen so far - rather than guess at required-parameter values for a paid
+API (each guess costs a real request and, per the docs' own examples,
+values are enum-constrained, so a wrong guess is a 400, not a fuzzy
+mismatch), `fetch_player_props` now logs the full response body on any
+HTTP error, so the next real call's error message - Betstamp's own
+validation text - supplies the missing values directly instead of another
+guess.
+
+NOTE ON FIELD NAMES: the individual market objects inside `"markets":
+[...]` were shown collapsed on the docs page, so the exact per-field key
+names inside each one are still unconfirmed either. This provider is
+written defensively: for each field it tries several plausible key names
+(see `_FIELD_ALIASES`) and skips (with a logged warning) any market entry
+it can't confidently parse, rather than guessing wrong silently. If you
+have API access, check one real response (`fetch_player_props` also
+accepts logging at DEBUG level) and add your exact key names to
+`_FIELD_ALIASES` if they differ.
 """
 
 import logging
@@ -99,7 +125,11 @@ class BetstampProvider(OddsProvider):
 
     def fetch_player_props(self, league: str) -> List[PropLine]:
         params: Dict[str, Any] = {
-            "league": league,
+            # Confirmed live (2026-08-29): the league enum is uppercase
+            # ("MLB", not "mlb") - this pipeline always calls with a
+            # lowercase league string, so upper-case it here rather than
+            # pushing that detail onto every caller.
+            "league": league.upper(),
             "bet_types": "player_props",
             "is_live": "false",
             "include_alts": str(self.include_alts).lower(),
@@ -113,7 +143,21 @@ class BetstampProvider(OddsProvider):
             params=params,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            # See this module's docstring ("REQUIRED PARAMETERS"): several
+            # required query params' valid values aren't confirmed yet, so
+            # surfacing Betstamp's own validation error text here (rather
+            # than just the bare status code) is what actually resolves
+            # that gap on the next real call, instead of another guess.
+            logger.warning(
+                "Betstamp API request failed: %s %s - response body: %s",
+                response.status_code,
+                response.url,
+                response.text[:2000],
+            )
+            raise
         payload = response.json()
         raw_markets = payload.get("markets", payload) if isinstance(payload, dict) else payload
 
