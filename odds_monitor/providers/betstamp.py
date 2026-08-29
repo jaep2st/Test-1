@@ -72,7 +72,15 @@ class BetstampProvider(OddsProvider):
         timeout: float = 10.0,
         session: Optional[requests.Session] = None,
     ):
-        self.api_key = api_key or os.environ.get("BETSTAMP_API_KEY")
+        # .strip() guards against a real failure mode: confirmed live
+        # (2026-08-29) that a BETSTAMP_API_KEY secret pasted with stray
+        # whitespace/newlines around it produces a header value requests
+        # rejects outright (InvalidHeader: "leading whitespace, reserved
+        # character(s), or return character(s)"), so the request never
+        # even gets sent - a silent-looking failure that's actually just a
+        # copy/paste artifact, not a bad key.
+        raw_key = api_key or os.environ.get("BETSTAMP_API_KEY")
+        self.api_key = raw_key.strip() if raw_key else raw_key
         if not self.api_key:
             raise ValueError(
                 "A Betstamp API key is required. Pass api_key=... or set "

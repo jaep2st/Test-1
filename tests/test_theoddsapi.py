@@ -213,3 +213,19 @@ def test_partial_per_event_failure_still_returns_what_succeeded():
 
     assert len(lines) == 1
     assert lines[0].player == "Player X"
+
+
+def test_api_key_whitespace_and_newlines_are_stripped():
+    # Same footgun confirmed live on BETSTAMP_API_KEY (2026-08-29): a
+    # secret pasted with stray surrounding whitespace/newlines. This
+    # provider sends the key as a query param rather than a header, so it
+    # wouldn't raise the same InvalidHeader error, but an un-stripped
+    # trailing newline would still corrupt the key value.
+    provider = TheOddsApiProvider(api_key="  test-key\n\n", session=_FakeSession({}))
+    assert provider.api_key == "test-key"
+
+
+def test_api_key_from_env_is_also_stripped(monkeypatch):
+    monkeypatch.setenv("ODDS_API_KEY", "env-key\n")
+    provider = TheOddsApiProvider(session=_FakeSession({}))
+    assert provider.api_key == "env-key"

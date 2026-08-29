@@ -107,3 +107,25 @@ def test_missing_api_key_raises_value_error(monkeypatch):
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_api_key_whitespace_and_newlines_are_stripped():
+    # Confirmed live (2026-08-29): a BETSTAMP_API_KEY secret pasted with
+    # stray surrounding whitespace/newlines produces a header value
+    # `requests` rejects outright (InvalidHeader), so the request never
+    # even gets sent. Guard against that footgun rather than just the
+    # cleanest possible input.
+    session = _FakeSession({"markets": []})
+    provider = BetstampProvider(api_key="  test-key\n\n", session=session)
+
+    assert provider.api_key == "test-key"
+
+    provider.fetch_player_props("mlb")
+    _, headers, _ = session.requested[0]
+    assert headers["X-API-KEY"] == "test-key"
+
+
+def test_api_key_from_env_is_also_stripped(monkeypatch):
+    monkeypatch.setenv("BETSTAMP_API_KEY", "env-key\n")
+    provider = BetstampProvider(session=_FakeSession({"markets": []}))
+    assert provider.api_key == "env-key"

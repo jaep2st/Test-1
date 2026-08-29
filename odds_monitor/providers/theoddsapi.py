@@ -95,7 +95,14 @@ class TheOddsApiProvider(OddsProvider):
         timeout: float = 15.0,
         session: Optional[requests.Session] = None,
     ):
-        self.api_key = api_key or os.environ.get("ODDS_API_KEY")
+        # .strip() guards against the same real footgun confirmed live on
+        # BETSTAMP_API_KEY (2026-08-29): a secret pasted with stray
+        # surrounding whitespace/newlines. Here it's sent as a query
+        # param rather than a header, so it wouldn't raise the same
+        # InvalidHeader error, but an un-stripped trailing newline would
+        # still corrupt the key value and fail auth in a confusing way.
+        raw_key = api_key or os.environ.get("ODDS_API_KEY")
+        self.api_key = raw_key.strip() if raw_key else raw_key
         if not self.api_key:
             raise ValueError(
                 "An Odds API key is required. Pass api_key=... or set the "
