@@ -55,11 +55,40 @@ def test_hot_batters_are_sorted_hottest_first():
     assert z_scores == sorted(z_scores, reverse=True)
 
 
-def test_hr_edges_all_have_model_ev_at_or_above_min_when_priced():
-    report = _run(min_ev_percent=0.0)
-    for edge in report.hr_edges:
-        if edge.has_market_data:
-            assert edge.ev_percent_model >= 0.0
+def test_priced_edges_are_not_dropped_at_the_default_min_ev():
+    # Confirmed live (2026-08-29): at the documented "0 = show all" default,
+    # a real priced candidate with negative model EV used to vanish from
+    # the report entirely (not shown priced, not shown model-only) instead
+    # of just being ranked lower - see rank_candidates' docstring. The mock
+    # odds provider's outlier-book mechanic (see market.py) guarantees a
+    # realistic spread of EVs across many candidates/seeds, so summing
+    # priced-edge counts across a few seeds reliably includes at least one
+    # negative-EV real price if the bug ever regresses.
+    total_priced = 0
+    negative_ev_present = False
+    for seed in range(1, 8):
+        report = _run(seed=seed, min_ev_percent=0.0)
+        for edge in report.hr_edges + report.tb_edges + report.hits_edges:
+            if edge.has_market_data:
+                total_priced += 1
+                if edge.ev_percent_model < 0.0:
+                    negative_ev_present = True
+    assert total_priced > 0
+    assert negative_ev_present, "expected at least one negative-EV priced candidate across seeds - test may need a wider seed range"
+
+
+def test_explicit_positive_min_ev_still_filters_priced_candidates():
+    # The filtering feature itself still works when a caller opts in with a
+    # real threshold above 0 - only the buggy default (0, "show all") was
+    # supposed to never drop anything.
+    report = _run(seed=1, min_ev_percent=0.0)
+    unfiltered_priced = [e for e in report.hr_edges + report.tb_edges + report.hits_edges if e.has_market_data]
+    assert any(e.ev_percent_model < 50.0 for e in unfiltered_priced)  # sanity: not every candidate is a huge outlier
+
+    report_filtered = _run(seed=1, min_ev_percent=50.0)
+    filtered_priced = [e for e in report_filtered.hr_edges + report_filtered.tb_edges + report_filtered.hits_edges if e.has_market_data]
+    assert all(e.ev_percent_model >= 50.0 for e in filtered_priced)
+    assert len(filtered_priced) < len(unfiltered_priced)
 
 
 def test_report_renders_without_error_and_mentions_key_sections():
@@ -78,8 +107,3 @@ def test_pipeline_is_deterministic_with_same_seed():
     assert [e.player for e in report_a.hr_edges] == [e.player for e in report_b.hr_edges]
 
 
-def test_hits_edges_all_have_model_ev_at_or_above_min_when_priced():
-    report = _run(min_ev_percent=0.0)
-    for edge in report.hits_edges:
-        if edge.has_market_data:
-            assert edge.ev_percent_model >= 0.0

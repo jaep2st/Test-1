@@ -236,6 +236,20 @@ def rank_candidates(candidates: List[EdgeCandidate], min_ev_percent: float = 0.0
     """Best spots first: prioritize candidates where both our model *and*
     the market's own cross-book consensus agree there's value, then fall
     back to model-only or market-only signal.
+
+    Confirmed live (2026-08-29): at the documented default (`min_ev_percent
+    =0.0`, "show all" per the CLI's --min-ev help text), this used to
+    silently DROP any priced candidate whose model-implied EV was negative
+    - not demote it, remove it from the returned list entirely, so it
+    showed up neither in the priced table nor the model-only fallback
+    (which only sees candidates still in this list). Real market data
+    (a genuine BetRivers home-run price) vanished without a trace for
+    several players this way, on every run, because every real workflow
+    dispatch passes --min-ev 0. A real price - even one our model doesn't
+    like - is exactly the information this report exists to surface, so
+    the default must never delete it. `min_ev_percent` now only filters
+    when a caller explicitly raises it above 0 to declutter a big table;
+    at 0 (or below), nothing with real market data is ever dropped.
     """
 
     def sort_key(c: EdgeCandidate):
@@ -244,5 +258,8 @@ def rank_candidates(candidates: List[EdgeCandidate], min_ev_percent: float = 0.0
         both_agree = c.ev_percent_model is not None and c.ev_percent_model > 0 and c.edge_vs_market is not None and c.edge_vs_market > 0
         return (2 if both_agree else (1 if c.ev_percent_model and c.ev_percent_model > 0 else 0), c.ev_percent_model or 0)
 
-    filtered = [c for c in candidates if not c.has_market_data or (c.ev_percent_model or -999) >= min_ev_percent]
+    filtered = [
+        c for c in candidates
+        if not c.has_market_data or min_ev_percent <= 0.0 or (c.ev_percent_model or -999) >= min_ev_percent
+    ]
     return sorted(filtered, key=sort_key, reverse=True)

@@ -8,7 +8,7 @@ appear in the report at all.
 from odds_monitor.ev import find_fair_prices
 from odds_monitor.models import PropLine
 
-from mlb_props.edges import build_hits_edges, build_hr_edges, build_total_bases_edges
+from mlb_props.edges import build_hits_edges, build_hr_edges, build_total_bases_edges, rank_candidates
 from mlb_props.market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
 from mlb_props.scoring import HitsScoreResult, HRScoreResult, TotalBasesScoreResult
 
@@ -184,6 +184,36 @@ def test_hits_no_price_falls_back_to_model_only():
     edges = build_hits_edges([_hits_score()], [], [], event_lookup={})
     assert not edges[0].has_market_data
     assert edges[0].best_line is None
+
+
+def test_rank_candidates_never_drops_a_priced_candidate_at_the_default_min_ev():
+    # Confirmed live (2026-08-29): a real HR price existed for players
+    # whose model probability was too low to justify the long-shot payout
+    # (negative EV(mdl)) - at the documented default (min_ev_percent=0.0,
+    # "show all"), those real prices vanished from the report entirely
+    # instead of just being ranked lower. A real market price is exactly
+    # the information this report exists to surface; the default must
+    # never delete it.
+    scores = [_hr_score(player="Bryce Eldridge", model_prob=0.08)]  # low model prob
+    lines = [_single_sided_hr_line(player="Bryce Eldridge", odds=440, book="betrivers")]  # long-shot real price
+    edges = build_hr_edges(scores, find_fair_prices(lines), lines, event_lookup={})
+    assert edges[0].ev_percent_model < 0.0  # confirms this candidate is the negative-EV case being tested
+
+    ranked = rank_candidates(edges, min_ev_percent=0.0)
+
+    assert len(ranked) == 1
+    assert ranked[0].has_market_data
+    assert ranked[0].player == "Bryce Eldridge"
+
+
+def test_rank_candidates_still_filters_when_a_positive_threshold_is_explicit():
+    scores = [_hr_score(player="Bryce Eldridge", model_prob=0.08)]
+    lines = [_single_sided_hr_line(player="Bryce Eldridge", odds=440, book="betrivers")]
+    edges = build_hr_edges(scores, find_fair_prices(lines), lines, event_lookup={})
+
+    ranked = rank_candidates(edges, min_ev_percent=5.0)
+
+    assert ranked == []
 
 
 def test_hits_edge_uses_the_standard_line_not_a_longer_shot_tier():
