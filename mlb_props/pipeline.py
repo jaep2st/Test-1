@@ -205,7 +205,18 @@ def _neutral_heat(batter_name: str) -> HeatIndex:
 # started yet (confirmed live 2026-08-29 via mlb_props_main.py's
 # --game-status-check). Anything else ("In Progress", "Final", "Game Over",
 # "Postponed", "Suspended", etc.) is treated as not-pregame.
-_PREGAME_STATUSES = frozenset({"scheduled", "pre-game", "preview", "warmup"})
+#
+# "delayed start" confirmed live 2026-08-30 (real game: Cincinnati Reds @
+# Chicago Cubs) as MLB's own detailedState for a game held before first
+# pitch (rain, etc.) - genuinely still pregame, not "started then paused".
+# Missing it here was a real bug: it silently dropped 207 real, currently-
+# posted draftkings/betmgm/betrivers odds lines for that exact game,
+# because the pair never made it into pregame_pairs below even though the
+# game hadn't started. Deliberately NOT matching a bare "delayed" - MLB
+# uses statuses like "In Progress - Delayed" for a mid-game hold, which is
+# correctly not-pregame and shouldn't be swept in by a broader substring
+# match.
+_PREGAME_STATUSES = frozenset({"scheduled", "pre-game", "preview", "warmup", "delayed start"})
 
 
 def _filter_lines_to_confirmed_pregame_games(lines: List[PropLine], slate: List[ProbableMatchup]) -> List[PropLine]:
