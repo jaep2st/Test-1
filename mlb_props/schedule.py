@@ -28,6 +28,15 @@ class ProbableMatchup:
     away_pitcher: Optional[str]
     home_pitcher: Optional[str]
     game_time_utc: Optional[str] = None
+    # MLB Stats API's own real-time status for this specific game
+    # ("Pre-Game", "In Progress", "Final", etc. - the same field
+    # mlb_props_main.py's --game-status-check surfaces). A doubleheader
+    # produces two separate `games` entries for the same two teams here,
+    # each with its own status - unlike a third-party odds provider, which
+    # confirmed live (2026-08-29) can expose only one event per matchup
+    # with no way to tell which specific game a price is for. See
+    # pipeline.py's cross-check against this field for why it matters.
+    status: Optional[str] = None
     # MLB Stats API only posts the actual starting lineup shortly before
     # first pitch, so well ahead of game time these are populated from each
     # team's active roster instead (all non-pitchers currently on the
@@ -107,6 +116,7 @@ class MlbStatsApiScheduleProvider(ScheduleProvider):
                             away_pitcher=away_pitcher,
                             home_pitcher=home_pitcher,
                             game_time_utc=game.get("gameDate"),
+                            status=game.get("status", {}).get("detailedState"),
                             away_batters=self._active_position_players(away_team_id)[: self.max_batters_per_team]
                             if self.include_rosters
                             else [],
