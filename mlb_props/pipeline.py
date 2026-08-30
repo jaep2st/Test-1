@@ -10,16 +10,24 @@ from datetime import date, datetime
 from typing import Dict, List, Optional
 
 from odds_monitor.ev import find_fair_prices
+from odds_monitor.models import PropLine
 from odds_monitor.providers.base import OddsProvider
 
 from .context import ParkWeatherProvider
-from .edges import EdgeCandidate, build_hr_edges, build_total_bases_edges, rank_candidates
+from .edges import EdgeCandidate, build_hits_edges, build_hr_edges, build_total_bases_edges, rank_candidates
 from .hot_streak import HeatIndex, HotStreakProvider
 from .hot_streak import LEAGUE_AVG_WOBA as HOT_STREAK_LEAGUE_AVG_WOBA
 from .matchup import LEAGUE_AVG_WOBA as MATCHUP_LEAGUE_AVG_WOBA
 from .matchup import MatchupProfile, MatchupProvider
 from .schedule import ProbableMatchup, ScheduleProvider
-from .scoring import HRScoreResult, TotalBasesScoreResult, compute_hr_score, compute_total_bases_score
+from .scoring import (
+    HitsScoreResult,
+    HRScoreResult,
+    TotalBasesScoreResult,
+    compute_hits_score,
+    compute_hr_score,
+    compute_total_bases_score,
+)
 from .statcast import StatcastProvider
 
 logger = logging.getLogger(__name__)
@@ -49,6 +57,7 @@ class SlateReport:
     hot_batters: List
     hr_edges: List[EdgeCandidate]
     tb_edges: List[EdgeCandidate]
+    hits_edges: List[EdgeCandidate]
 
 
 def _resolve_batters(slate: List[ProbableMatchup], extra_batters: Optional[List[str]]) -> Dict[str, dict]:
@@ -191,6 +200,72 @@ def _neutral_heat(batter_name: str) -> HeatIndex:
     )
 
 
+# MLB Stats API's real, observed status strings for a game that hasn't
+# started yet (confirmed live 2026-08-29 via mlb_props_main.py's
+# --game-status-check). Anything else ("In Progress", "Final", "Game Over",
+# "Postponed", "Suspended", etc.) is treated as not-pregame.
+_PREGAME_STATUSES = frozenset({"scheduled", "pre-game", "preview", "warmup"})
+
+
+def _filter_lines_to_confirmed_pregame_games(lines: List[PropLine], slate: List[ProbableMatchup]) -> List[PropLine]:
+    """Second, independent safety net on top of the odds provider's own
+    commence_time-based live-game filter (see theoddsapi.py's
+    `include_live` docstring). Confirmed live (2026-08-29), two real gaps
+    that filter alone can't catch:
+
+    1. A real event's `commence_time` can just be wrong - a genuinely
+       Final game (Kansas City @ Cleveland) whose odds-provider event
+       still looked pregame, so a real price for it slipped through.
+    2. A doubleheader's two real games can be exposed by the odds
+       provider as a *single* event with no way to tell which specific
+       game a price is actually for (confirmed: The Odds API returned
+       exactly one event for Boston @ NY Yankees and one for Arizona @
+       San Francisco on a day MLB's own schedule shows two real games for
+       each - one Final/In Progress, one still Pre-Game/upcoming).
+
+    This cross-checks every priced line against MLB's own authoritative
+    per-game status instead of trusting the odds provider's belief about
+    game state at all: a matchup with *no* game still pregame (checking
+    every real game between those two teams today, so a doubleheader's
+    still-upcoming nightcap correctly keeps its price even though the
+    earlier game already finished) has its lines dropped entirely.
+
+    A matchup with unknown status (`status=None` - e.g. `--mock` mode, or
+    a schedule fetch that didn't populate it) is treated as pregame, same
+    as before this check existed - strictly additive, never a new way to
+    lose real data on incomplete schedule info. A matchup absent from
+    today's schedule entirely (shouldn't happen, but not impossible on a
+    date mismatch) is likewise kept rather than dropped on missing info.
+    """
+    pregame_pairs = set()
+    all_pairs = set()
+    for game in slate:
+        pair = (game.away_team, game.home_team)
+        all_pairs.add(pair)
+        status = (game.status or "").strip().lower()
+        if not status or status in _PREGAME_STATUSES:
+            pregame_pairs.add(pair)
+
+    kept: List[PropLine] = []
+    dropped = 0
+    for line in lines:
+        # PropLine.event is "away @ home" - see theoddsapi.py's event_label.
+        parts = line.event.split(" @ ", 1)
+        pair = (parts[0], parts[1]) if len(parts) == 2 else None
+        if pair is None or pair not in all_pairs or pair in pregame_pairs:
+            kept.append(line)
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning(
+            "Dropped %d odds line(s) for game(s) MLB's own schedule confirms are no longer pregame "
+            "(the odds provider's own start-time data missed this) - see _filter_lines_to_confirmed_"
+            "pregame_games's docstring",
+            dropped,
+        )
+    return kept
+
+
 def run_pipeline(
     game_date: date,
     schedule: ScheduleProvider,
@@ -254,6 +329,7 @@ def run_pipeline(
     # Phase 2 - full score: only for the prefiltered candidates.
     hr_scores: List[HRScoreResult] = []
     tb_scores: List[TotalBasesScoreResult] = []
+    hits_scores: List[HitsScoreResult] = []
     heat_indices: List[HeatIndex] = []
     event_lookup: Dict[str, str] = {}
 
@@ -271,8 +347,10 @@ def run_pipeline(
 
         hr_result = compute_hr_score(batter, pitcher, matchup, park_ctx, heat)
         tb_result = compute_total_bases_score(batter, pitcher, matchup, park_ctx, heat)
+        hits_result = compute_hits_score(batter, pitcher, matchup, park_ctx, heat)
         hr_scores.append(hr_result)
         tb_scores.append(tb_result)
+        hits_scores.append(hits_result)
 
         # Full component breakdown for every scored candidate - not shown
         # in the report itself (too dense for a ranked table), but useful
@@ -281,7 +359,7 @@ def run_pipeline(
         # --log-level DEBUG, and printed with a stable "CANDIDATE_DETAIL"
         # prefix so it's easy to grep out of a run's logs.
         logger.info(
-            "CANDIDATE_DETAIL %s vs %s (%s) | %s | %s | %s | HR components=%s | TB components=%s",
+            "CANDIDATE_DETAIL %s vs %s (%s) | %s | %s | %s | HR components=%s | TB components=%s | Hits components=%s",
             batter_name,
             pitcher.player,
             ctx["event"],
@@ -290,6 +368,7 @@ def run_pipeline(
             matchup,
             hr_result.components,
             tb_result.components,
+            hits_result.components,
         )
         logger.info("CANDIDATE_DETAIL %s heat=%s", batter_name, heat)
 
@@ -298,10 +377,12 @@ def run_pipeline(
     except Exception:
         logger.exception("Failed to fetch MLB player-prop odds")
         odds_lines = []
+    odds_lines = _filter_lines_to_confirmed_pregame_games(odds_lines, slate)
     fair_prices = find_fair_prices(odds_lines)
 
     hr_edges = rank_candidates(build_hr_edges(hr_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
     tb_edges = rank_candidates(build_total_bases_edges(tb_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
+    hits_edges = rank_candidates(build_hits_edges(hits_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
 
     heat_indices.sort(key=lambda h: h.z_score, reverse=True)
 
@@ -312,4 +393,5 @@ def run_pipeline(
         hot_batters=heat_indices,
         hr_edges=hr_edges,
         tb_edges=tb_edges,
+        hits_edges=hits_edges,
     )

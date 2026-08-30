@@ -6,7 +6,7 @@ Two tools sharing one odds pipeline:
   assists, rebounds, etc.) across sportsbooks and alerts you whenever the
   same prop's line differs by 2+ points between books.
 - **`mlb_props`** (`mlb_props_main.py`) - a daily MLB report that ranks the
-  best home run and 2+ total bases props on the slate. It combines Statcast
+  best home run, 2+ total bases, and 1+ hits props on the slate. It combines Statcast
   batted-ball quality (barrel%, hard-hit%, exit velocity, launch angle,
   xwOBA/xSLG), platoon splits, batter-vs-pitcher history, pitch-mix fit,
   recent hot/cold form, ballpark factors and live wind/temperature into a
@@ -28,10 +28,11 @@ pip install -r requirements.txt
 python mlb_props_main.py --mock --mock-seed 1
 ```
 
-This prints four sections: the slate's best HR-friendly matchups (park +
+This prints five sections: the slate's best HR-friendly matchups (park +
 weather + opposing pitcher vulnerability), who's hot right now, the
-top-ranked home run props, and the top-ranked 2+ total bases props - each
-ranked by expected value against the best price actually on the market.
+top-ranked home run props, the top-ranked 2+ total bases props, and the
+top-ranked 1+ hits props - each ranked by expected value against the best
+price actually on the market.
 
 ### Running it for real
 
@@ -116,16 +117,20 @@ on-demand refresh with brand-new data.
 
 ### How the composite score and +EV flag work
 
-`mlb_props/scoring.py` weights each factor (see `HR_WEIGHTS` /
-`TB_WEIGHTS` there for exact numbers) into a transparent 0-100 score, then
+`mlb_props/scoring.py` weights each factor (see `HR_WEIGHTS` / `TB_WEIGHTS` /
+`HITS_WEIGHTS` there for exact numbers) into a transparent 0-100 score, then
 maps that score onto a heuristic model probability calibrated to realistic
-MLB base rates (~10% average HR-per-game, ~42% average 2+ total-bases
-game). That's **not** a trained/calibrated model - it's a directional
-estimate you cross-check against the market. Two independent signals drive
-the ranking:
+MLB base rates (~10% average HR-per-game, ~42% average 2+ total-bases game,
+~66% average 1+ hit game). That's **not** a trained/calibrated model - it's a
+directional estimate you cross-check against the market. The 1+ hits score
+has a known blind spot worth knowing before trusting it: it has no batter or
+pitcher strikeout-rate data to draw on (see `compute_hits_score`'s docstring),
+so a high-power, high-strikeout slugger can score better than a genuinely
+better "gets a hit" bet this model can't tell apart from an average one on
+that axis. Two independent signals drive the ranking:
 
-1. **Model edge**: does our score say this player's HR/2+TB probability is
-   higher than what the best available price actually pays for?
+1. **Model edge**: does our score say this player's probability is higher
+   than what the best available price actually pays for?
 2. **Market edge**: regardless of our model, is one book's price
    meaningfully better than the no-vig consensus price across all books
    quoting it (classic line-shopping value, via `odds_monitor/ev.py`)?

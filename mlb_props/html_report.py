@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from .edges import EdgeCandidate
 from .pipeline import MatchupEnvironment, SlateReport
-from .scoring import HR_WEIGHTS, TB_WEIGHTS
+from .scoring import HITS_WEIGHTS, HR_WEIGHTS, TB_WEIGHTS
 
 _STYLE = """
 :root{
@@ -254,9 +254,11 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     hot = report.hot_batters
     hr = report.hr_edges
     tb = report.tb_edges
+    hits = report.hits_edges
 
     top_hr = next((e for e in hr if e.has_market_data), hr[0] if hr else None)
     top_tb = next((e for e in tb if e.has_market_data), tb[0] if tb else None)
+    top_hits = next((e for e in hits if e.has_market_data), hits[0] if hits else None)
     best_env = envs[0] if envs else None
     hottest = hot[0] if hot else None
 
@@ -274,6 +276,8 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
         tiles.append(tile("Top HR Prop", top_hr.player, _top_tile_sub(top_hr)))
     if top_tb:
         tiles.append(tile("Top 2+ TB Prop", top_tb.player, _top_tile_sub(top_tb)))
+    if top_hits:
+        tiles.append(tile("Top 1+ Hits Prop", top_hits.player, _top_tile_sub(top_hits)))
     if best_env:
         m = best_env.matchup
         tiles.append(tile("Best HR Environment", m.venue, f"{_esc(m.away_team)} @ {_esc(m.home_team)} &middot; env score <b>{best_env.environment_score:.1f}</b>/100"))
@@ -358,6 +362,10 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
   </section>
 
   <section class="section">
+    {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price - no batter/pitcher strikeout-rate data feeds this score, see the weights note below", hits, "Model P(1+ Hits)", top)}
+  </section>
+
+  <section class="section">
     <div class="section-head">
       <h2>How the score is built</h2>
       <span class="hint">mlb_props/scoring.py &mdash; every weight below, verbatim</span>
@@ -365,6 +373,7 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     <div class="method-grid">
       <div class="method-card"><h3>Home run score (weights)</h3>{_weight_rows(HR_WEIGHTS)}</div>
       <div class="method-card"><h3>2+ total bases score (weights)</h3>{_weight_rows(TB_WEIGHTS)}</div>
+      <div class="method-card"><h3>1+ hits score (weights)</h3>{_weight_rows(HITS_WEIGHTS)}<p class="hint" style="margin-top:8px;">No strikeout/contact-rate data available (see scoring.py) - power-heavy, high-strikeout hitters may score better here than they should.</p></div>
     </div>
     <div class="sources">
       <span class="source-chip">Statcast batted-ball quality &rarr; pybaseball / Baseball Savant</span>

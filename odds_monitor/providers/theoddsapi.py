@@ -11,9 +11,10 @@ Two calls per league fetch:
 2. `GET /v4/sports/{sport_key}/events/{event_id}/odds` per event - the
    actual player-prop odds. This one costs credits (roughly
    `markets_requested x regions_requested` per call per their pricing docs),
-   so this provider deliberately requests only the two markets this pipeline
-   uses and a single region ("us") to keep a full MLB slate (~15 games/day)
-   well within the free tier.
+   so this provider deliberately requests only the three markets this
+   pipeline uses (home runs, total bases, hits) and a single region ("us")
+   to keep a full MLB slate (~15 games/day) affordable even on a modest
+   paid plan.
 
 NOTE ON FIELD NAMES: this is written against the schema documented at
 https://the-odds-api.com/liveapi/guides/v4/#get-event-odds - each
@@ -28,12 +29,26 @@ crashing the whole fetch, and both "Yes"/"No" and "Over"/"Under" outcome
 labels are accepted for the home-run market in case books differ. If a
 live run's `--log-level DEBUG` output shows different field names, fix the
 constants/parsing below and this docstring.
+
+ALREADY-STARTED GAMES ARE SKIPPED ENTIRELY: confirmed live (2026-08-29) that
+once a game is underway, books re-price player props in-play - a batter's
+home-run line splits into escalating tiers (0.5/1.5/2.5+ HR) priced off
+however many plate appearances he has left today, and a tier can vanish
+entirely once he's already cleared it (e.g. no more 0.5 line once he's hit
+his first). This model has no live-game-state awareness (no outs/PA-
+remaining tracking) - its probability estimate is only meaningful against a
+pregame price. `fetch_player_props` compares each event's `commence_time`
+to now and skips odds for anything already started, rather than silently
+mixing pregame and live prices in the same ranked table (which previously
+produced nonsense "edges" like +150% EV(mdl) that was really just a live,
+low-PA-remaining line, not a real mispricing).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -44,15 +59,29 @@ from .base import OddsProvider
 
 logger = logging.getLogger(__name__)
 
+
+class OddsFetchFailed(Exception):
+    """Raised when every per-event odds request in a fetch failed - a
+    systemic problem (auth/quota exhaustion, an outage) as opposed to a
+    legitimately empty market (a game with no props posted yet, which
+    returns an empty list, not this exception). Callers that want to fall
+    back to a different odds provider on a real failure (see
+    odds_monitor/providers/fallback.py) should catch this specifically;
+    anything else (a genuinely empty slate, a per-game parsing hiccup)
+    still degrades to an empty list exactly as before.
+    """
+
+
 DEFAULT_BASE_URL = "https://api.the-odds-api.com/v4"
 
 # Maps this pipeline's generic league string to The Odds API's sport key.
 _SPORT_KEYS: Dict[str, str] = {"mlb": "baseball_mlb"}
 
-# The Odds API's real, documented market keys for these two props (see
+# The Odds API's real, documented market keys for these props (see
 # https://the-odds-api.com/sports-odds-data/betting-markets.html).
 MARKET_KEY_HOME_RUN = "batter_home_runs"
 MARKET_KEY_TOTAL_BASES = "batter_total_bases"
+MARKET_KEY_HITS = "batter_hits"
 
 # Normalizes whatever outcome label a book uses onto the "yes"/"no" or
 # "over"/"under" sides this pipeline's edges/ev code expects (see
@@ -60,9 +89,11 @@ MARKET_KEY_TOTAL_BASES = "batter_total_bases"
 # home-run prop as Yes/No, others as Over/Under 0.5.
 _HR_SIDE_ALIASES = {"yes": "yes", "over": "yes", "no": "no", "under": "no"}
 _TB_SIDE_ALIASES = {"over": "over", "under": "under"}
+_HITS_SIDE_ALIASES = {"over": "over", "under": "under"}
 
 _DEFAULT_HR_LINE = 0.5
 _DEFAULT_TB_LINE = 1.5
+_DEFAULT_HITS_LINE = 0.5
 
 
 class TheOddsApiProvider(OddsProvider):
@@ -82,7 +113,14 @@ class TheOddsApiProvider(OddsProvider):
         timeout: float = 15.0,
         session: Optional[requests.Session] = None,
     ):
-        self.api_key = api_key or os.environ.get("ODDS_API_KEY")
+        # .strip() guards against the same real footgun confirmed live on
+        # BETSTAMP_API_KEY (2026-08-29): a secret pasted with stray
+        # surrounding whitespace/newlines. Here it's sent as a query
+        # param rather than a header, so it wouldn't raise the same
+        # InvalidHeader error, but an un-stripped trailing newline would
+        # still corrupt the key value and fail auth in a confusing way.
+        raw_key = api_key or os.environ.get("ODDS_API_KEY")
+        self.api_key = raw_key.strip() if raw_key else raw_key
         if not self.api_key:
             raise ValueError(
                 "An Odds API key is required. Pass api_key=... or set the "
@@ -99,7 +137,14 @@ class TheOddsApiProvider(OddsProvider):
         # injected, so tests supplying a fake session are unaffected.
         self.session = session or build_retrying_session()
 
-    def fetch_player_props(self, league: str) -> List[PropLine]:
+    def fetch_player_props(self, league: str, include_live: bool = False) -> List[PropLine]:
+        """`include_live=True` fetches already-started games too (tagged
+        `PropLine.is_live=True`) instead of skipping them - see this
+        module's docstring for why the default (False) excludes them from
+        the normal pipeline. Intended for a standalone live-odds scan (see
+        `mlb_props_main.py`'s `--live-odds-scan`), never for the main
+        model-comparison report.
+        """
         sport_key = _SPORT_KEYS.get(league.lower())
         if sport_key is None:
             logger.warning("TheOddsApiProvider has no sport-key mapping for league %r - returning no lines", league)
@@ -107,11 +152,15 @@ class TheOddsApiProvider(OddsProvider):
 
         try:
             events = self._get(f"/sports/{sport_key}/events", {})
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to fetch %s event list from The Odds API", league)
-            return []
+            raise OddsFetchFailed(f"Failed to fetch {league} event list: {exc}") from exc
 
         lines: List[PropLine] = []
+        attempted = 0
+        failed = 0
+        skipped_live = 0
+        now = datetime.now(timezone.utc)
         for event in events or []:
             event_id = event.get("id")
             home_team = event.get("home_team")
@@ -119,29 +168,90 @@ class TheOddsApiProvider(OddsProvider):
             if not event_id or not home_team or not away_team:
                 continue
             event_label = f"{away_team} @ {home_team}"
+            # Confirmed live (2026-08-29): a game already in progress gets
+            # re-priced in-play (e.g. a batter's home-run line splitting into
+            # escalating 0.5/1.5/2.5 HR tiers mid-game, or the 0.5 tier
+            # vanishing entirely once he's already hit one and that market
+            # graded), priced off however many plate appearances he has left
+            # today - not a full game. This model has no live-game-state
+            # awareness at all (no outs/PA-remaining tracking), so its
+            # probability estimate is only meaningful against a pregame
+            # price; comparing it to a live-repriced one produces nonsense
+            # "edges" (seen: +150% EV(mdl) that was actually a live line, not
+            # a real mispricing). Skip odds entirely for anything already
+            # underway rather than silently mixing pregame and live prices
+            # in the same ranked table.
+            is_live = False
+            commence_time = event.get("commence_time")
+            if commence_time:
+                try:
+                    starts_at = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+                    is_live = starts_at <= now
+                except ValueError:
+                    logger.warning("Could not parse commence_time %r for %s - fetching odds anyway", commence_time, event_label)
+            if is_live and not include_live:
+                skipped_live += 1
+                logger.info(
+                    "Skipping odds for %s - already started at %s (live in-game prices aren't "
+                    "comparable to this model's pregame-only estimate)", event_label, commence_time,
+                )
+                continue
+            attempted += 1
             try:
                 payload = self._get(
                     f"/sports/{sport_key}/events/{event_id}/odds",
                     {
                         "regions": self.regions,
-                        "markets": f"{MARKET_KEY_HOME_RUN},{MARKET_KEY_TOTAL_BASES}",
+                        "markets": f"{MARKET_KEY_HOME_RUN},{MARKET_KEY_TOTAL_BASES},{MARKET_KEY_HITS}",
                         "oddsFormat": "american",
                     },
                 )
             except Exception:
+                failed += 1
                 logger.warning("Failed to fetch odds for event %r (%s) - skipping this game", event_id, event_label, exc_info=True)
                 continue
-            lines.extend(self._parse_event_odds(payload, league, event_label))
+            lines.extend(self._parse_event_odds(payload, league, event_label, is_live=is_live))
+
+        # Every single per-event request failing (with at least one
+        # attempted) is a systemic problem - confirmed live: a real run hit
+        # 401 Unauthorized on all 17 event-odds calls in a row while the
+        # free /events call itself succeeded, consistent with a free-tier
+        # credit quota running out mid-day. A slate with 0 games (an
+        # off-day) or a handful of per-game hiccups among mostly-successful
+        # calls both still degrade to whatever partial lines were gathered,
+        # same as before - only total failure raises, so a caller wanting a
+        # fallback provider (see fallback.py) can catch this specifically.
+        if attempted and failed == attempted:
+            raise OddsFetchFailed(
+                f"All {attempted} event-odds requests failed for {league} - likely an API auth/quota "
+                "problem, not an empty market. See the per-event WARNING logs above for the underlying errors."
+            )
+        if skipped_live:
+            logger.info(
+                "Skipped odds for %d already-started %s event(s) this run - see INFO logs above for which",
+                skipped_live, league,
+            )
         return lines
 
     def _get(self, path: str, params: Dict[str, Any]) -> Any:
         full_params = dict(params)
         full_params["apiKey"] = self.api_key
         response = self.session.get(f"{self.base_url}{path}", params=full_params, timeout=self.timeout)
+        # The Odds API returns remaining/used credit counts on every response
+        # (success or failure) via these headers - logging them at INFO here
+        # means the free /events call each run doubles as a quota check,
+        # confirmed live (2026-08-29) after a run exhausted the free tier
+        # with per-event odds calls returning 401 while /events kept
+        # returning 200, with no way to see the actual credit count short of
+        # logging into the dashboard.
+        remaining = response.headers.get("x-requests-remaining")
+        used = response.headers.get("x-requests-used")
+        if remaining is not None or used is not None:
+            logger.info("The Odds API quota after %s: used=%s remaining=%s", path, used, remaining)
         response.raise_for_status()
         return response.json()
 
-    def _parse_event_odds(self, payload: Dict[str, Any], league: str, event_label: str) -> List[PropLine]:
+    def _parse_event_odds(self, payload: Dict[str, Any], league: str, event_label: str, is_live: bool = False) -> List[PropLine]:
         lines: List[PropLine] = []
         bookmakers = (payload or {}).get("bookmakers", []) or []
         if not bookmakers:
@@ -202,12 +312,16 @@ class TheOddsApiProvider(OddsProvider):
                     logger.debug("%s/%s batter_home_runs: point->price per player=%s", event_label, book_key, per_player_point_price)
                 elif market_key == MARKET_KEY_TOTAL_BASES:
                     side_aliases, our_market, default_line = _TB_SIDE_ALIASES, MARKET_KEY_TOTAL_BASES, _DEFAULT_TB_LINE
+                elif market_key == MARKET_KEY_HITS:
+                    side_aliases, our_market, default_line = _HITS_SIDE_ALIASES, MARKET_KEY_HITS, _DEFAULT_HITS_LINE
                 else:
                     continue
                 for outcome in market.get("outcomes", []) or []:
                     try:
                         lines.append(
-                            self._parse_outcome(outcome, side_aliases, our_market, default_line, book_key, league, event_label)
+                            self._parse_outcome(
+                                outcome, side_aliases, our_market, default_line, book_key, league, event_label, is_live
+                            )
                         )
                     except (KeyError, TypeError, ValueError) as exc:
                         logger.warning("Skipping unparsable outcome on %s/%s: %s (%r)", book_key, market_key, exc, outcome)
@@ -222,6 +336,7 @@ class TheOddsApiProvider(OddsProvider):
         book_key: str,
         league: str,
         event_label: str,
+        is_live: bool = False,
     ) -> PropLine:
         player = outcome.get("description")
         if not player:
@@ -243,4 +358,5 @@ class TheOddsApiProvider(OddsProvider):
             odds=int(price),
             sportsbook=book_key,
             event=event_label,
+            is_live=is_live,
         )

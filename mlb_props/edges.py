@@ -44,8 +44,15 @@ from typing import Dict, List, Optional
 from odds_monitor.ev import FairPrice, american_to_decimal, model_ev_percent
 from odds_monitor.models import PropLine
 
-from .market import HOME_RUN_LINE_FOR_1PLUS, MARKET_HOME_RUN, MARKET_TOTAL_BASES, TOTAL_BASES_LINE_FOR_2PLUS
-from .scoring import HRScoreResult, TotalBasesScoreResult
+from .market import (
+    HITS_LINE_FOR_1PLUS,
+    HOME_RUN_LINE_FOR_1PLUS,
+    MARKET_HITS,
+    MARKET_HOME_RUN,
+    MARKET_TOTAL_BASES,
+    TOTAL_BASES_LINE_FOR_2PLUS,
+)
+from .scoring import HitsScoreResult, HRScoreResult, TotalBasesScoreResult
 
 
 @dataclass(frozen=True)
@@ -96,11 +103,18 @@ class EdgeCandidate:
         )
 
 
-def _fair_price_lookup(fair_prices: List[FairPrice], market: str, side: str) -> Dict[str, FairPrice]:
+def _fair_price_lookup(fair_prices: List[FairPrice], market: str, side: str, expected_line: float) -> Dict[str, FairPrice]:
+    """Restricted to `expected_line` for the same reason `_single_sided_lookup`
+    below is: `find_fair_prices` now returns one `FairPrice` per real point
+    tier it finds two-sided pricing for (see `odds_monitor.ev._pair_key`'s
+    docstring) - a player can have a real, correctly-devigged fair price for
+    both "1+ hits" (0.5) and "2+ hits" (1.5) at once, and only the standard
+    line this pipeline actually scores should ever surface here.
+    """
     return {
         fp.player.strip().lower(): fp
         for fp in fair_prices
-        if fp.market.lower() == market.lower() and fp.side.lower() == side.lower()
+        if fp.market.lower() == market.lower() and fp.side.lower() == side.lower() and abs(fp.line - expected_line) < 1e-6
     }
 
 
@@ -143,7 +157,7 @@ def _build_edges(
     lines: List[PropLine],
     event_lookup: Dict[str, str],
 ) -> List[EdgeCandidate]:
-    lookup = _fair_price_lookup(fair_prices, market, side)
+    lookup = _fair_price_lookup(fair_prices, market, side, expected_line)
     single_sided = _single_sided_lookup(lines, market, side, expected_line)
     candidates: List[EdgeCandidate] = []
     for result in scores:
@@ -212,10 +226,30 @@ def build_total_bases_edges(
     return _build_edges(scores, MARKET_TOTAL_BASES, "over", TOTAL_BASES_LINE_FOR_2PLUS, fair_prices, lines, event_lookup)
 
 
+def build_hits_edges(
+    scores: List[HitsScoreResult], fair_prices: List[FairPrice], lines: List[PropLine], event_lookup: Dict[str, str]
+) -> List[EdgeCandidate]:
+    return _build_edges(scores, MARKET_HITS, "over", HITS_LINE_FOR_1PLUS, fair_prices, lines, event_lookup)
+
+
 def rank_candidates(candidates: List[EdgeCandidate], min_ev_percent: float = 0.0) -> List[EdgeCandidate]:
     """Best spots first: prioritize candidates where both our model *and*
     the market's own cross-book consensus agree there's value, then fall
     back to model-only or market-only signal.
+
+    Confirmed live (2026-08-29): at the documented default (`min_ev_percent
+    =0.0`, "show all" per the CLI's --min-ev help text), this used to
+    silently DROP any priced candidate whose model-implied EV was negative
+    - not demote it, remove it from the returned list entirely, so it
+    showed up neither in the priced table nor the model-only fallback
+    (which only sees candidates still in this list). Real market data
+    (a genuine BetRivers home-run price) vanished without a trace for
+    several players this way, on every run, because every real workflow
+    dispatch passes --min-ev 0. A real price - even one our model doesn't
+    like - is exactly the information this report exists to surface, so
+    the default must never delete it. `min_ev_percent` now only filters
+    when a caller explicitly raises it above 0 to declutter a big table;
+    at 0 (or below), nothing with real market data is ever dropped.
     """
 
     def sort_key(c: EdgeCandidate):
@@ -224,5 +258,8 @@ def rank_candidates(candidates: List[EdgeCandidate], min_ev_percent: float = 0.0
         both_agree = c.ev_percent_model is not None and c.ev_percent_model > 0 and c.edge_vs_market is not None and c.edge_vs_market > 0
         return (2 if both_agree else (1 if c.ev_percent_model and c.ev_percent_model > 0 else 0), c.ev_percent_model or 0)
 
-    filtered = [c for c in candidates if not c.has_market_data or (c.ev_percent_model or -999) >= min_ev_percent]
+    filtered = [
+        c for c in candidates
+        if not c.has_market_data or min_ev_percent <= 0.0 or (c.ev_percent_model or -999) >= min_ev_percent
+    ]
     return sorted(filtered, key=sort_key, reverse=True)

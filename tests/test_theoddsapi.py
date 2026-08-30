@@ -1,9 +1,12 @@
-from odds_monitor.providers.theoddsapi import TheOddsApiProvider
+import pytest
+
+from odds_monitor.providers.theoddsapi import OddsFetchFailed, TheOddsApiProvider
 
 
 class _FakeResponse:
-    def __init__(self, payload):
+    def __init__(self, payload, headers=None):
         self._payload = payload
+        self.headers = headers or {}
 
     def raise_for_status(self):
         pass
@@ -12,10 +15,24 @@ class _FakeResponse:
         return self._payload
 
 
+class _UnauthorizedResponse:
+    """Stands in for a real 401 from The Odds API - raise_for_status()
+    raises, same as requests.Response does for a 4xx/5xx status.
+    """
+
+    def raise_for_status(self):
+        raise Exception("401 Client Error: Unauthorized")
+
+    def json(self):
+        raise AssertionError("json() should never be reached - raise_for_status() should raise first")
+
+
 class _FakeSession:
     """Stubs the two real-world calls TheOddsApiProvider makes: the events
     list, then one per-event odds fetch. Keyed by the request path so a
-    single fake session can serve a whole `fetch_player_props` call.
+    single fake session can serve a whole `fetch_player_props` call. A
+    response value of None (instead of a payload dict) serves an
+    `_UnauthorizedResponse` for that path, to simulate a real API failure.
     """
 
     def __init__(self, responses):
@@ -26,7 +43,7 @@ class _FakeSession:
         self.requested_params.append((url, params))
         for path_suffix, payload in self.responses.items():
             if url.endswith(path_suffix):
-                return _FakeResponse(payload)
+                return _UnauthorizedResponse() if payload is None else _FakeResponse(payload)
         raise AssertionError(f"Unexpected URL requested: {url}")
 
 
@@ -128,6 +145,35 @@ def test_unparsable_outcomes_are_skipped_not_raised():
     assert lines[0].player == "Player Y"
 
 
+def test_parses_hits_market_outcomes():
+    events_payload = [{"id": "evt1", "home_team": "New York Yankees", "away_team": "Houston Astros"}]
+    odds_payload = {
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "batter_hits",
+                        "outcomes": [
+                            {"name": "Over", "description": "Aaron Judge", "point": 0.5, "price": -145},
+                            {"name": "Under", "description": "Aaron Judge", "point": 0.5, "price": 115},
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+    provider = _provider({"/events": events_payload, "/evt1/odds": odds_payload})
+
+    lines = provider.fetch_player_props("mlb")
+
+    assert len(lines) == 2
+    hits_over = next(l for l in lines if l.market == "batter_hits" and l.side == "over")
+    assert hits_over.player == "Aaron Judge"
+    assert hits_over.line == 0.5
+    assert hits_over.odds == -145
+
+
 def test_unknown_league_returns_no_lines_without_network_call():
     provider = _provider({})
     assert provider.fetch_player_props("nba") == []
@@ -140,3 +186,210 @@ def test_missing_api_key_raises_value_error(monkeypatch):
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_all_events_failing_raises_odds_fetch_failed():
+    # Confirmed live (2026-08-29): a real run hit 401 on all 17 per-event
+    # odds calls in a row while /events itself succeeded - a systemic
+    # problem (quota/auth), not an empty market. That distinction is what
+    # lets a caller fall back to a second odds provider instead of quietly
+    # reporting "no props" - see odds_monitor/providers/fallback.py.
+    events_payload = [
+        {"id": "evt1", "home_team": "A", "away_team": "B"},
+        {"id": "evt2", "home_team": "C", "away_team": "D"},
+    ]
+    provider = _provider({"/events": events_payload, "/evt1/odds": None, "/evt2/odds": None})
+
+    with pytest.raises(OddsFetchFailed):
+        provider.fetch_player_props("mlb")
+
+
+def test_events_list_itself_failing_raises_odds_fetch_failed():
+    provider = _provider({"/events": None})
+
+    with pytest.raises(OddsFetchFailed):
+        provider.fetch_player_props("mlb")
+
+
+def test_a_genuinely_empty_slate_does_not_raise():
+    # No games today is not a failure - distinct from every event's odds
+    # call failing.
+    provider = _provider({"/events": []})
+    assert provider.fetch_player_props("mlb") == []
+
+
+def test_already_started_events_are_skipped_entirely():
+    # Confirmed live (2026-08-29): an in-progress game's props get re-priced
+    # off plate-appearances-remaining, not comparable to this model's
+    # pregame-only estimate - fetch_player_props must not even request odds
+    # for it, let alone return lines built from it.
+    import datetime as dt
+
+    past = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    events_payload = [
+        {"id": "live_evt", "home_team": "A", "away_team": "B", "commence_time": past},
+        {"id": "upcoming_evt", "home_team": "C", "away_team": "D", "commence_time": future},
+    ]
+    odds_payload = {
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "batter_home_runs",
+                        "outcomes": [{"name": "Yes", "description": "Player X", "price": 300}],
+                    }
+                ],
+            }
+        ]
+    }
+    provider = _provider({"/events": events_payload, "/upcoming_evt/odds": odds_payload})
+
+    lines = provider.fetch_player_props("mlb")
+
+    # Only the upcoming event's odds were requested at all - the live one
+    # never hit the network.
+    requested_paths = [url for url, _ in provider.session.requested_params]
+    assert not any("live_evt" in p for p in requested_paths)
+    assert any("upcoming_evt" in p for p in requested_paths)
+    assert len(lines) == 1
+    assert lines[0].player == "Player X"
+
+
+def test_all_events_already_started_returns_empty_without_raising():
+    # Every game live is not a systemic failure (no requests even attempted,
+    # let alone failed) - distinct from OddsFetchFailed's "every request we
+    # tried came back an error" case.
+    import datetime as dt
+
+    past = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    events_payload = [{"id": "live_evt", "home_team": "A", "away_team": "B", "commence_time": past}]
+    provider = _provider({"/events": events_payload})
+
+    assert provider.fetch_player_props("mlb") == []
+
+
+def test_include_live_fetches_and_tags_started_games():
+    # include_live=True is the opt-in path for a standalone live-odds scan
+    # (mlb_props_main.py's --live-odds-scan) - the default (False, tested
+    # above) stays skip-and-exclude for the main model-comparison report.
+    import datetime as dt
+
+    past = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    events_payload = [
+        {"id": "live_evt", "home_team": "A", "away_team": "B", "commence_time": past},
+        {"id": "upcoming_evt", "home_team": "C", "away_team": "D", "commence_time": future},
+    ]
+    odds_payload = {
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "batter_home_runs",
+                        "outcomes": [{"name": "Yes", "description": "Player X", "price": 300}],
+                    }
+                ],
+            }
+        ]
+    }
+    provider = _provider({"/events": events_payload, "/live_evt/odds": odds_payload, "/upcoming_evt/odds": odds_payload})
+
+    lines = provider.fetch_player_props("mlb", include_live=True)
+
+    assert len(lines) == 2
+    by_event = {line.event: line for line in lines}
+    assert by_event["B @ A"].is_live is True
+    assert by_event["D @ C"].is_live is False
+
+
+def test_unparsable_commence_time_still_attempts_fetch():
+    # Defensive: a malformed/missing commence_time shouldn't silently drop a
+    # game - fall back to fetching its odds rather than skipping it blind.
+    events_payload = [{"id": "evt1", "home_team": "A", "away_team": "B", "commence_time": "not-a-timestamp"}]
+    odds_payload = {"bookmakers": []}
+    provider = _provider({"/events": events_payload, "/evt1/odds": odds_payload})
+
+    provider.fetch_player_props("mlb")
+
+    requested_paths = [url for url, _ in provider.session.requested_params]
+    assert any("evt1" in p for p in requested_paths)
+
+
+def test_partial_per_event_failure_still_returns_what_succeeded():
+    events_payload = [
+        {"id": "evt1", "home_team": "A", "away_team": "B"},
+        {"id": "evt2", "home_team": "C", "away_team": "D"},
+    ]
+    odds_payload = {
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "batter_home_runs",
+                        "outcomes": [{"name": "Yes", "description": "Player X", "price": 300}],
+                    }
+                ],
+            }
+        ]
+    }
+    # evt1 succeeds, evt2 fails - a mix, not total failure, should not raise.
+    provider = _provider({"/events": events_payload, "/evt1/odds": odds_payload, "/evt2/odds": None})
+
+    lines = provider.fetch_player_props("mlb")
+
+    assert len(lines) == 1
+    assert lines[0].player == "Player X"
+
+
+def test_api_key_whitespace_and_newlines_are_stripped():
+    # Same footgun confirmed live on BETSTAMP_API_KEY (2026-08-29): a
+    # secret pasted with stray surrounding whitespace/newlines. This
+    # provider sends the key as a query param rather than a header, so it
+    # wouldn't raise the same InvalidHeader error, but an un-stripped
+    # trailing newline would still corrupt the key value.
+    provider = TheOddsApiProvider(api_key="  test-key\n\n", session=_FakeSession({}))
+    assert provider.api_key == "test-key"
+
+
+def test_api_key_from_env_is_also_stripped(monkeypatch):
+    monkeypatch.setenv("ODDS_API_KEY", "env-key\n")
+    provider = TheOddsApiProvider(session=_FakeSession({}))
+    assert provider.api_key == "env-key"
+
+
+class _QuotaHeaderSession:
+    """Stubs just the free /events call, with the quota headers The Odds
+    API attaches to every response (success or failure).
+    """
+
+    def get(self, url, params=None, timeout=None):
+        return _FakeResponse([], headers={"x-requests-remaining": "437", "x-requests-used": "63"})
+
+
+def test_requests_all_three_markets_per_event():
+    events_payload = [{"id": "evt1", "home_team": "A", "away_team": "B"}]
+    provider = _provider({"/events": events_payload, "/evt1/odds": {"bookmakers": []}})
+
+    provider.fetch_player_props("mlb")
+
+    _, params = provider.session.requested_params[1]  # [0] is the /events call
+    assert params["markets"] == "batter_home_runs,batter_total_bases,batter_hits"
+
+
+def test_quota_headers_are_logged_on_the_free_events_call(caplog):
+    # Confirmed live (2026-08-29): after a run exhausted the free tier, the
+    # only way to see the actual remaining-credit count was logging into
+    # the dashboard - the free /events call gets hit every run regardless,
+    # so logging these headers here turns it into a built-in quota check.
+    import logging
+
+    provider = TheOddsApiProvider(api_key="test-key", session=_QuotaHeaderSession())
+
+    with caplog.at_level(logging.INFO, logger="odds_monitor.providers.theoddsapi"):
+        provider.fetch_player_props("mlb")
+
+    assert any("used=63 remaining=437" in r.message for r in caplog.records)

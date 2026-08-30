@@ -35,6 +35,20 @@ on:
         description: "Minimum model EV%% required to show a prop"
         required: false
         default: "0"
+      books:
+        description: "Restrict odds to these sportsbook IDs, space-separated (e.g. 'draftkings fanduel betmgm caesars espnbet betrivers'). Leave blank for all books."
+        required: false
+        default: ""
+      live_odds_scan:
+        description: "Also run --live-odds-scan (checks already-started games' odds for real cross-book price value; printed to this job's log, not the published report)."
+        type: boolean
+        required: false
+        default: false
+      game_status_check:
+        description: "Also run --game-status-check (prints MLB's own authoritative real-time game status for every game today, straight from the MLB Stats API; printed to this job's log, not the published report)."
+        type: boolean
+        required: false
+        default: false
   schedule:
     # Twice daily, timed around the US MLB slate (adjust to taste - both
     # are UTC, since GitHub Actions schedule: doesn't support local time):
@@ -76,6 +90,7 @@ jobs:
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
+          BOOKS_INPUT: ${{ inputs.books }}
         run: |
           mkdir -p public
           # --max-candidates raised from the CLI default of 30: a real run
@@ -84,14 +99,56 @@ jobs:
           # runtime to score more of the slate's roster before the cheap
           # phase-1 prefilter cuts anyone off - broader coverage, same
           # per-run cost profile.
+          #
+          # BOOKS_ARGS is built from the env var (not interpolated directly
+          # into this script) to avoid shell-injection from the workflow_dispatch
+          # input; --books is repeatable on the CLI, one flag per book. Empty
+          # input -> empty array -> TheOddsApiProvider's default of "all books",
+          # so the twice-daily scheduled runs (which never set this input) are
+          # unaffected.
+          BOOKS_ARGS=()
+          if [ -n "$BOOKS_INPUT" ]; then
+            for b in $BOOKS_INPUT; do
+              BOOKS_ARGS+=(--books "$b")
+            done
+          fi
           python mlb_props_main.py \
             --date "${{ inputs.date || 'today' }}" \
             --min-ev "${{ inputs.min_ev || '0' }}" \
             --top 25 \
             --max-candidates 60 \
+            "${BOOKS_ARGS[@]}" \
             --html-out public/index.html \
             --out public/report.txt \
             --log-level DEBUG
+
+      - name: Scan live-game odds for real cross-book value
+        if: ${{ inputs.live_odds_scan }}
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BOOKS_INPUT: ${{ inputs.books }}
+        run: |
+          # Separate from the report above on purpose: this model has no
+          # live-game-state awareness, so it never compares its score to a
+          # live line (see odds_monitor/providers/theoddsapi.py) - this
+          # only checks the one thing that's still valid without a model,
+          # real cross-book price gaps on the same live bet. Printed here,
+          # not published to Pages - it's a diagnostic, not a report.
+          BOOKS_ARGS=()
+          if [ -n "$BOOKS_INPUT" ]; then
+            for b in $BOOKS_INPUT; do
+              BOOKS_ARGS+=(--books "$b")
+            done
+          fi
+          python mlb_props_main.py --live-odds-scan "${BOOKS_ARGS[@]}"
+
+      - name: Cross-check real-time game status against MLB's own API
+        if: ${{ inputs.game_status_check }}
+        run: |
+          # Independent of The Odds API's commence_time (confirmed live
+          # 2026-08-29 to be wrong for at least one real game) - MLB's own
+          # schedule endpoint is the actual source of truth for game state.
+          python mlb_props_main.py --game-status-check --date "${{ inputs.date || 'today' }}"
 
       - uses: actions/upload-pages-artifact@v3
         with:

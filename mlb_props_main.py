@@ -30,7 +30,8 @@ import logging
 import os
 import sys
 from datetime import date, datetime
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
+from zoneinfo import ZoneInfo
 
 try:
     from dotenv import load_dotenv
@@ -39,8 +40,12 @@ try:
 except ImportError:
     pass  # python-dotenv is optional
 
+from collections import defaultdict
+
+from odds_monitor.http_utils import build_retrying_session
 from odds_monitor.providers.base import OddsProvider
 from odds_monitor.providers.betstamp import BetstampProvider
+from odds_monitor.providers.fallback import FallbackOddsProvider
 from odds_monitor.providers.theoddsapi import TheOddsApiProvider
 
 from mlb_props.context import LiveParkWeatherProvider, MockParkWeatherProvider, ParkWeatherProvider
@@ -50,15 +55,27 @@ from mlb_props.matchup import MatchupProvider, MockMatchupProvider, PybaseballMa
 from mlb_props.html_report import render_html_report
 from mlb_props.pipeline import run_pipeline
 from mlb_props.report import render_report
-from mlb_props.schedule import MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
+from mlb_props.schedule import MLB_STATS_API_BASE, MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
 from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider
 
 logger = logging.getLogger(__name__)
 
 
+# MLB is a US league; the slate's "today" is the US Eastern calendar day,
+# not whatever timezone the machine running this happens to be in. Confirmed
+# live: a manual run at 2026-08-28 20:22 ET (2026-08-29 00:22 UTC) against
+# the naive `date.today()` pulled the *next* day's slate instead of that
+# evening's - the GitHub Actions runner's OS clock is UTC, which rolls to
+# the next calendar date at 8pm ET (EDT) / 7pm ET (EST), hours before that
+# evening's games are anywhere near over. Anchoring to America/New_York
+# keeps `--date today` meaning what a bettor means by "today" regardless of
+# the runner's own timezone.
+_MLB_TZ = ZoneInfo("America/New_York")
+
+
 def _parse_date(value: str) -> date:
     if value == "today":
-        return date.today()
+        return datetime.now(_MLB_TZ).date()
     return datetime.strptime(value, "%Y-%m-%d").date()
 
 
@@ -96,12 +113,24 @@ def build_providers(args: argparse.Namespace):
     # The Odds API is the default real-odds source (free tier, self-serve
     # signup, no account approval needed - see odds_monitor/providers/
     # theoddsapi.py). Betstamp stays available as an alternative for anyone
-    # who already has a key for it. Checked in that order; first one with a
-    # key configured wins.
+    # who already has a key for it. When both keys are configured, The Odds
+    # API is tried first but Betstamp now backstops it: confirmed live
+    # (2026-08-29) that a free-tier ODDS_API_KEY can run out of credits
+    # mid-day and return 401 on every event, which used to mean the whole
+    # run silently degraded to model-only rankings even with a second,
+    # working key sitting right there unused. FallbackOddsProvider only
+    # engages on that kind of systemic failure (see its docstring) - a
+    # slate with genuinely no props posted yet still returns empty, same
+    # as always.
     odds_api_key = args.odds_api_key or os.environ.get("ODDS_API_KEY")
     betstamp_key = args.api_key or os.environ.get("BETSTAMP_API_KEY")
-    if odds_api_key:
-        odds: OddsProvider = TheOddsApiProvider(api_key=odds_api_key, books=args.books)
+    if odds_api_key and betstamp_key:
+        odds: OddsProvider = FallbackOddsProvider(
+            primary=TheOddsApiProvider(api_key=odds_api_key, books=args.books),
+            secondary=BetstampProvider(api_key=betstamp_key, book_ids=args.books),
+        )
+    elif odds_api_key:
+        odds = TheOddsApiProvider(api_key=odds_api_key, books=args.books)
     elif betstamp_key:
         odds = BetstampProvider(api_key=betstamp_key, book_ids=args.books)
     else:
@@ -118,9 +147,114 @@ def build_providers(args: argparse.Namespace):
     return schedule, statcast, matchup, hot_streak, park_weather, odds
 
 
+def run_live_odds_scan(odds_api_key: str, books: Optional[List[str]]) -> str:
+    """Standalone diagnostic for `--live-odds-scan`: fetches odds for
+    already-started games too (normally excluded - see theoddsapi.py's
+    module docstring on why comparing them to this model is invalid) and
+    looks for the one kind of "value" that's still checkable without any
+    model at all: the *same exact bet* (player, market, side, line, event)
+    priced differently across books, i.e. real line-shopping. Deliberately
+    never computes an EV%% or "edge" against this model's score for live
+    lines - only real cross-book price comparison.
+    """
+    provider = TheOddsApiProvider(api_key=odds_api_key, books=books)
+    lines = provider.fetch_player_props("mlb", include_live=True)
+    live_lines = [line for line in lines if line.is_live]
+
+    out: List[str] = []
+    out.append(f"LIVE ODDS SCAN - {len(live_lines)} live-game prop line(s) found "
+               f"across {len({l.event for l in live_lines})} in-progress game(s)")
+    out.append("")
+
+    if not live_lines:
+        out.append("No live-game odds available right now.")
+        return "\n".join(out)
+
+    groups: Dict[tuple, List] = defaultdict(list)
+    for line in live_lines:
+        groups[line.key].append(line)
+
+    multi_book = {k: v for k, v in groups.items() if len({l.sportsbook for l in v}) >= 2}
+    out.append(f"{len(groups)} distinct live prop(s) total, {len(multi_book)} quoted by 2+ books "
+               "(the only ones where a real cross-book price comparison is possible).")
+    out.append("")
+
+    if multi_book:
+        out.append("Cross-book price comparison (same player/market/side/line, different books):")
+        for key, group in sorted(multi_book.items(), key=lambda kv: -max(l.odds for l in kv[1] if l.odds is not None)):
+            best = max(group, key=lambda l: l.odds if l.odds is not None else -10**9)
+            worst = min(group, key=lambda l: l.odds if l.odds is not None else 10**9)
+            spread = (best.odds or 0) - (worst.odds or 0)
+            out.append(
+                f"  - {best.player} ({best.event}) {best.market} {best.side} {best.line:g}: "
+                f"best {best.sportsbook}={best.odds:+d}, worst {worst.sportsbook}={worst.odds:+d} "
+                f"(spread {spread:+d}) | all: " + ", ".join(f"{l.sportsbook}={l.odds:+d}" for l in group)
+            )
+    else:
+        out.append(
+            "No live prop is currently quoted by more than one book, so there's no real cross-book value "
+            "to find right now - every live line here is a single book's price with nothing to compare it "
+            "against. That's not the same as \"good value\"; it's \"unverifiable,\" which is why the main "
+            "report excludes these entirely rather than guessing."
+        )
+        out.append("")
+        out.append("Single-book live lines, for reference only (NOT compared to this model - see above):")
+        for key, group in sorted(groups.items(), key=lambda kv: kv[1][0].event):
+            line = group[0]
+            out.append(f"  - {line.player} ({line.event}) {line.market} {line.side} {line.line:g}: {line.sportsbook}={line.odds:+d}")
+
+    return "\n".join(out)
+
+
+def run_game_status_check(game_date: date) -> str:
+    """Standalone diagnostic for `--game-status-check`: pulls MLB's own
+    authoritative real-time game status (Scheduled/In Progress/Final, with
+    inning for in-progress games) directly from the MLB Stats API's
+    schedule endpoint - the same host `MlbStatsApiScheduleProvider` already
+    uses for the slate/probable-pitchers, just reading its `status` field
+    too (unused elsewhere in this project).
+
+    This exists specifically because `TheOddsApiProvider`'s live-game
+    filter (see that module's `include_live` docstring) relies on The Odds
+    API's own `commence_time` per event, and that has been confirmed wrong
+    for at least one real game (2026-08-29: Kansas City @ Cleveland showed
+    as not-yet-started there while it had actually started) - MLB's own
+    schedule endpoint is the actual source of truth for game state, not a
+    third-party odds aggregator's copy of it.
+    """
+    session = build_retrying_session()
+    resp = session.get(
+        f"{MLB_STATS_API_BASE}/schedule",
+        params={"sportId": 1, "date": game_date.isoformat()},
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+
+    out: List[str] = [f"GAME STATUS CHECK (MLB Stats API, authoritative) - {game_date.isoformat()}", ""]
+    games = [g for block in payload.get("dates", []) for g in block.get("games", [])]
+    if not games:
+        out.append("No games found for this date.")
+        return "\n".join(out)
+
+    for game in games:
+        try:
+            teams = game["teams"]
+            away = teams["away"]["team"]["name"]
+            home = teams["home"]["team"]["name"]
+            status = game.get("status", {}).get("detailedState", "Unknown")
+            inning = game.get("linescore", {}).get("currentInningOrdinal")
+            half = game.get("linescore", {}).get("inningState")
+            when = f" ({half} {inning})" if inning and half else ""
+            out.append(f"  {away} @ {home}: {status}{when}")
+        except (KeyError, TypeError):
+            out.append(f"  (unparsable game entry: {game.get('gamePk', '?')})")
+    return "\n".join(out)
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Find +EV MLB home run and 2+ total bases props using Statcast quality-of-contact, "
+        description="Find +EV MLB home run, 2+ total bases, and 1+ hits props using Statcast quality-of-contact, "
         "matchup/platoon/pitch-mix edges, recent form, ballpark/weather, and cross-book odds."
     )
     parser.add_argument("--date", dest="game_date", default="today", type=_parse_date, help="Slate date, YYYY-MM-DD (default: today).")
@@ -152,12 +286,50 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Logging verbosity.")
     parser.add_argument("--out", default=None, help="Write the console-text report to this file instead of (or in addition to) stdout.")
     parser.add_argument("--html-out", default=None, help="Also write a self-contained styled HTML report to this file (see mlb_props/html_report.py).")
+    parser.add_argument(
+        "--live-odds-scan",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead scan already-started games' live odds "
+        "for real cross-book price value (never compared to this model's pregame-only score - see "
+        "odds_monitor/providers/theoddsapi.py). Requires --odds-api-key/ODDS_API_KEY.",
+    )
+    parser.add_argument(
+        "--game-status-check",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead print MLB's own authoritative "
+        "real-time game status (Scheduled/In Progress/Final) for every game on --date, straight from the "
+        "MLB Stats API - useful for cross-checking whether a game the odds pipeline treated as pregame has "
+        "actually already started (see theoddsapi.py's commence_time-based filter, which relies on a "
+        "third-party copy of this same information and has been confirmed wrong for at least one real game).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    if args.game_status_check:
+        text = run_game_status_check(args.game_date)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote game status check to %s", args.out)
+        return 0
+
+    if args.live_odds_scan:
+        odds_api_key = args.odds_api_key or os.environ.get("ODDS_API_KEY")
+        if not odds_api_key:
+            print("Configuration error: --live-odds-scan requires --odds-api-key or ODDS_API_KEY.", file=sys.stderr)
+            return 2
+        text = run_live_odds_scan(odds_api_key, args.books)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote live odds scan to %s", args.out)
+        return 0
 
     try:
         schedule, statcast, matchup, hot_streak, park_weather, odds = build_providers(args)

@@ -1,7 +1,7 @@
 from mlb_props.context import MockParkWeatherProvider
 from mlb_props.hot_streak import MockHotStreakProvider
 from mlb_props.matchup import MockMatchupProvider
-from mlb_props.scoring import compute_hr_score, compute_total_bases_score
+from mlb_props.scoring import compute_hits_score, compute_hr_score, compute_total_bases_score
 from mlb_props.statcast import BatterProfile, PitcherProfile
 
 
@@ -129,3 +129,64 @@ def test_score_components_sum_to_the_overall_score():
     result = compute_hr_score(_elite_batter(), _bad_pitcher(), matchup, park, heat)
     recomputed = sum(result.components[k] * w for k, w in HR_WEIGHTS.items())
     assert round(recomputed, 1) == result.score
+
+
+def test_hits_score_favors_higher_contact_quality_and_better_matchup():
+    park = MockParkWeatherProvider(seed=5).get_context("Yankee Stadium")
+    heat = MockHotStreakProvider(seed=5).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=5).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+    good = compute_hits_score(_elite_batter(), _bad_pitcher(), matchup, park, heat)
+
+    park2 = MockParkWeatherProvider(seed=5).get_context("Yankee Stadium")
+    heat2 = MockHotStreakProvider(seed=5).get_heat_index("Weak Contact Hitter")
+    matchup2 = MockMatchupProvider(seed=5).get_matchup("Weak Contact Hitter", "L", "Good Pitcher", "R", {})
+    bad = compute_hits_score(_weak_batter(), _good_pitcher(), matchup2, park2, heat2)
+
+    assert good.score > bad.score
+    assert good.model_prob > bad.model_prob
+
+
+def test_hits_model_prob_stays_within_calibrated_bounds():
+    park = MockParkWeatherProvider(seed=6).get_context("Coors Field")
+    heat = MockHotStreakProvider(seed=6).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=6).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+    result = compute_hits_score(_elite_batter(), _bad_pitcher(), matchup, park, heat)
+    # 1+ hits is a much higher-base-rate event than a HR or 2+ TB (a real
+    # everyday hitter clears 50% most games) - the calibration anchors in
+    # scoring.py reflect that, so the bounds here are intentionally much
+    # higher than test_hr_model_prob_stays_within_calibrated_bounds' 0.30.
+    assert 0.0 < result.model_prob <= 0.90
+
+
+def test_hits_score_components_sum_to_the_overall_score():
+    from mlb_props.scoring import HITS_WEIGHTS
+
+    park = MockParkWeatherProvider(seed=7).get_context("Fenway Park")
+    heat = MockHotStreakProvider(seed=7).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=7).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+    result = compute_hits_score(_elite_batter(), _bad_pitcher(), matchup, park, heat)
+    recomputed = sum(result.components[k] * w for k, w in HITS_WEIGHTS.items())
+    assert round(recomputed, 1) == result.score
+
+
+def test_hits_score_does_not_use_park_or_weather_as_scoring_inputs():
+    # See scoring.py's note: park/weather are HR-oriented and have no real
+    # relationship to a batter making contact for a hit, so they're carried
+    # through on the result only for display, never weighted into the score.
+    from mlb_props.scoring import HITS_WEIGHTS
+
+    assert "park_factor" not in HITS_WEIGHTS
+    assert "weather_boost" not in HITS_WEIGHTS
+
+    heat = MockHotStreakProvider(seed=8).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=8).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+    # Two genuinely different park/weather contexts (different seeds, so
+    # different randomized wind/temp/park-factor) - if park/weather were
+    # scoring inputs here, these would differ; they must not.
+    park_a = MockParkWeatherProvider(seed=1).get_context("Coors Field")
+    park_b = MockParkWeatherProvider(seed=99).get_context("Oracle Park")
+    assert park_a.park_hr_factor != park_b.park_hr_factor  # sanity: contexts really do differ
+
+    result_a = compute_hits_score(_elite_batter(), _bad_pitcher(), matchup, park_a, heat)
+    result_b = compute_hits_score(_elite_batter(), _bad_pitcher(), matchup, park_b, heat)
+    assert result_a.score == result_b.score
