@@ -276,8 +276,21 @@ def compute_hits_score(
         # high here, a high-strikeout one scores low. Same inversion logic
         # as HR_WEIGHTS' "pitcher_allowed" comment, just on the opposite
         # side of the plate appearance.
-        "batter_k_pct": 100.0 - _normalize(batter.k_pct, 12.0, 32.0),
-        "pitcher_k_pct_allowed": 100.0 - _normalize(pitcher.k_pct_allowed, 15.0, 32.0),
+        #
+        # `None` (not yet enriched, or enrichment couldn't resolve a real
+        # value - see BatterProfile.k_pct's docstring) scores as a plain
+        # neutral 50.0, deliberately NOT run through the inversion below.
+        # Confirmed live 2026-08-29 why that guard is required: this
+        # component used to default a plain float 0.0 (an impossible real
+        # K%) straight into `100.0 - _normalize(0.0, 12.0, 32.0)`, which
+        # clips to 0 and inverts to 100 - the *maximum* possible score,
+        # exactly backwards for data we don't have. Neutral is the correct,
+        # honest stand-in, same convention `_pitcher_arsenal`'s docstring
+        # already promises for any other missing signal.
+        "batter_k_pct": 100.0 - _normalize(batter.k_pct, 12.0, 32.0) if batter.k_pct is not None else 50.0,
+        "pitcher_k_pct_allowed": (
+            100.0 - _normalize(pitcher.k_pct_allowed, 15.0, 32.0) if pitcher.k_pct_allowed is not None else 50.0
+        ),
     }
     score = sum(components[k] * w for k, w in HITS_WEIGHTS.items())
     # Calibration anchors: a real MLB everyday hitter gets 1+ hits in

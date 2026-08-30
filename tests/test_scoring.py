@@ -235,3 +235,45 @@ def test_hits_score_rewards_facing_a_lower_strikeout_pitcher_holding_everything_
 
     assert good.score > bad.score
     assert good.components["pitcher_k_pct_allowed"] > bad.components["pitcher_k_pct_allowed"]
+
+
+def test_unenriched_k_pct_scores_as_neutral_not_as_a_maximum():
+    # Regression test for a real bug caught against live data 2026-08-29:
+    # BatterProfile.k_pct/PitcherProfile.k_pct_allowed default to None when
+    # enrichment hasn't run or failed to resolve a real value (confirmed
+    # live: happens for real players, not just in theory). A plain float
+    # 0.0 default used to feed straight into the inverted normalize below
+    # and come out as 100.0 - the *maximum* possible contact score - for
+    # data we simply don't have. It must come out as a neutral 50.0 instead.
+    from dataclasses import replace
+
+    park = MockParkWeatherProvider(seed=11).get_context("Fenway Park")
+    heat = MockHotStreakProvider(seed=11).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=11).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+
+    unenriched_batter = replace(_elite_batter(), k_pct=None)
+    unenriched_pitcher = replace(_bad_pitcher(), k_pct_allowed=None)
+    assert unenriched_batter.k_pct is None
+    assert unenriched_pitcher.k_pct_allowed is None
+
+    result = compute_hits_score(unenriched_batter, unenriched_pitcher, matchup, park, heat)
+
+    assert result.components["batter_k_pct"] == 50.0
+    assert result.components["pitcher_k_pct_allowed"] == 50.0
+
+
+def test_batter_profile_and_pitcher_profile_default_k_pct_to_none_not_zero():
+    # The dataclass defaults themselves must stay None, not 0.0 - see the
+    # regression test above for why 0.0 is actively dangerous here, not
+    # just imprecise.
+    from dataclasses import replace
+
+    from mlb_props.statcast import BatterProfile, PitcherProfile
+
+    batter = _elite_batter()
+    default_batter = replace(batter, k_pct=BatterProfile.__dataclass_fields__["k_pct"].default)
+    assert default_batter.k_pct is None
+
+    pitcher = _bad_pitcher()
+    default_pitcher = replace(pitcher, k_pct_allowed=PitcherProfile.__dataclass_fields__["k_pct_allowed"].default)
+    assert default_pitcher.k_pct_allowed is None

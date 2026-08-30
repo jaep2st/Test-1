@@ -102,10 +102,17 @@ class BatterProfile:
     # HITS_WEIGHTS). Defaulted here since neither Savant leaderboard used by
     # `batter_profile()` carries it; filled with a real per-batter value in
     # `enrich_batted_ball()`, the same phase-2-only pitch-level fetch that
-    # already computes `hr_fb_pct`. Defaults to 0.0 (not enriched yet), same
-    # convention as `hr_fb_pct` before phase 2 runs - never treat an
-    # un-enriched 0.0 as "never strikes out."
-    k_pct: float = 0.0
+    # already computes `hr_fb_pct`. None (not 0.0) when not yet enriched, or
+    # when enrichment couldn't resolve a real value (confirmed live
+    # 2026-08-29: happens for real, not just theoretically - e.g. a player-ID
+    # lookup miss) - `compute_hits_score` scores this component as neutral,
+    # not as "never strikes out." A plain 0.0 default was tried first and
+    # rejected: `batter_k_pct`'s inverted normalize (100 - normalize(...))
+    # turns an unenriched 0.0 into a *maximum* "elite contact" score, exactly
+    # backwards from "we don't know" - `Optional`/`None` makes "not enriched"
+    # unambiguous instead of overloading a number that also happens to be
+    # outside any real batter's actual range.
+    k_pct: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -128,10 +135,12 @@ class PitcherProfile:
     # other half of the Hits-score strikeout blind spot (see BatterProfile.k_pct
     # and scoring.py's HITS_WEIGHTS note). Computed in `_pitcher_arsenal()`
     # from the same pitch-level Statcast log already fetched there for
-    # pitch-mix/throws/HR9, at no extra network cost. Defaults to 0.0 when
-    # that fetch fails or returns nothing usable - same "missing, not really
-    # zero" caveat as `hr_per_9` before the same fetch was added for it.
-    k_pct_allowed: float = 0.0
+    # pitch-mix/throws/HR9, at no extra network cost. None (not 0.0) when
+    # that fetch fails or returns nothing usable - see BatterProfile.k_pct's
+    # comment for why `Optional`/`None`, not a plain-float default, is
+    # required here: confirmed live 2026-08-29 against a real pitcher whose
+    # ID lookup or pitch-log fetch came back empty.
+    k_pct_allowed: Optional[float] = None
 
 
 class StatcastProvider(ABC):
@@ -205,7 +214,7 @@ class PybaseballStatcastProvider(StatcastProvider):
         self._throws_cache: Dict[str, Optional[str]] = {}
         self._hr9_cache: Dict[str, float] = {}
         self._hr_fb_allowed_cache: Dict[str, float] = {}
-        self._k_pct_allowed_cache: Dict[str, float] = {}
+        self._k_pct_allowed_cache: Dict[str, Optional[float]] = {}
         # A team's ~9 roster batters all share the same 1-2 probable
         # pitchers, so without memoizing by name, pitcher_profile() (now a
         # non-trivial fetch, with the pitch-mix lookup below) would redo
@@ -371,7 +380,9 @@ class PybaseballStatcastProvider(StatcastProvider):
     # class don't carry innings-pitched at all (confirmed live).
     _PA_PER_9_INNINGS = 38.3
 
-    def _pitcher_arsenal(self, pyb, player: str) -> "tuple[Dict[str, float], Optional[str], float, float, float]":
+    def _pitcher_arsenal(
+        self, pyb, player: str
+    ) -> "tuple[Dict[str, float], Optional[str], float, float, Optional[float]]":
         """Everything about a pitcher that isn't on the exitvelo/expected-
         stats leaderboards, all pulled from one fetch of their own season
         of Statcast pitch-level data and cached together:
@@ -402,13 +413,13 @@ class PybaseballStatcastProvider(StatcastProvider):
                 self._throws_cache.get(player),
                 self._hr9_cache.get(player, 0.0),
                 self._hr_fb_allowed_cache.get(player, 0.0),
-                self._k_pct_allowed_cache.get(player, 0.0),
+                self._k_pct_allowed_cache.get(player, None),
             )
         mix: Dict[str, float] = {}
         throws: Optional[str] = None
         hr9 = 0.0
         hr_fb_allowed = 0.0
-        k_pct_allowed = 0.0
+        k_pct_allowed: Optional[float] = None
         try:
             player_id = lookup_mlbam_id(pyb, player, self._id_cache)
             if player_id is not None:
