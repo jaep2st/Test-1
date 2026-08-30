@@ -36,9 +36,10 @@ class _FakeSession:
 
 
 def _real_payload():
+    # Real confirmed shape (live 2026-08-30): data.items, not a bare list.
     return {
-        "meta": {"asOf": "2026-08-30T12:00:00Z"},
-        "data": [
+        "meta": {"asOf": "2026-08-30T12:00:00Z", "count": 2},
+        "data": {"items": [
             {
                 "gameId": 776345,
                 "gameTime": "19:10",
@@ -75,7 +76,7 @@ def _real_payload():
                 "doublesTriplesWeather": None,
                 "singlesWeather": None,
             },
-        ],
+        ]},
     }
 
 
@@ -151,6 +152,23 @@ def test_live_provider_unexpected_response_shape_returns_none_not_raises():
     provider = LiveBallparkPalProvider(api_key="k", session=session)
 
     assert provider.get_hitter_park_factor("Mike Trout", date(2026, 8, 30)) is None
+
+
+def test_live_provider_also_accepts_a_bare_list_under_data():
+    # Not the real confirmed shape (see _real_payload's comment - real is
+    # data.items), but kept as a fallback in case a different endpoint or a
+    # future API version nests differently - this proves that fallback
+    # path still works, not just the "items" one.
+    payload = {
+        "meta": {},
+        "data": [{"playerName": "Mike Trout", "homeRuns": 1.1, "homeRunsStadium": 1.05, "homeRunsWeather": 0.05}],
+    }
+    session = _FakeSession(payload)
+    provider = LiveBallparkPalProvider(api_key="k", session=session)
+
+    factor = provider.get_hitter_park_factor("Mike Trout", date(2026, 8, 30))
+    assert factor is not None
+    assert factor.home_runs == 1.1
 
 
 def test_live_provider_skips_a_row_missing_playername_without_dropping_the_rest():

@@ -109,15 +109,19 @@ class LiveBallparkPalProvider(BallparkPalProvider):
             resp.raise_for_status()
             payload = resp.json()
 
-            # Response envelope is `{"meta": {...}, "data": ...}` (confirmed
-            # live via Ballpark Pal's own docs). The exact shape of `data`
-            # for this specific endpoint (a bare list of rows vs. something
-            # nested) wasn't shown in the docs screenshots available during
-            # development - accept either rather than guessing wrong and
-            # silently returning nothing.
+            # Response envelope is `{"meta": {...}, "data": {"items": [...]}}`
+            # - confirmed live 2026-08-30 (real response: {"meta": {...,
+            # "count": 364}, "data": {"items": [{...one row per player per
+            # game...}]}}). Docs screenshots available during development
+            # didn't show this specific endpoint's nesting; "items" wasn't
+            # among the guessed keys on the first attempt, which silently
+            # produced zero rows despite a real HTTP 200 (see this
+            # provider's earlier log for that). Other keys kept as a
+            # fallback rather than hard-coding only "items", in case a
+            # different endpoint or a future API version nests differently.
             rows = payload.get("data", payload)
             if isinstance(rows, dict):
-                rows = rows.get("hitters", rows.get("rows", rows.get("data", [])))
+                rows = rows.get("items", rows.get("hitters", rows.get("rows", rows.get("data", []))))
             if not isinstance(rows, list):
                 logger.warning(
                     "Unexpected Ballpark Pal parkfactors/hitters response shape for %s: %r", game_date, type(rows)
