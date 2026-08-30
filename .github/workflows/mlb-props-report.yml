@@ -92,7 +92,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pybaseball pandas
+          pip install pybaseball pandas reportlab
 
       - name: Generate report from live data
         env:
@@ -129,7 +129,20 @@ jobs:
             "${BOOKS_ARGS[@]}" \
             --html-out public/index.html \
             --out public/report.txt \
+            --pdf-out public/Longball_Board.pdf \
             --log-level DEBUG
+
+      - name: Upload the PDF as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: longball-board-pdf
+          # public/report.txt/index.html already prove a run happened even
+          # on a mostly-quiet slate; a missing PDF (e.g. reportlab install
+          # hiccup - see mlb_props_main.py's --pdf-out handling, which never
+          # fails the run for this) shouldn't fail the upload step too.
+          path: public/Longball_Board.pdf
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Scan live-game odds for real cross-book value
         if: ${{ inputs.live_odds_scan }}

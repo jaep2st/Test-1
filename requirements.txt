@@ -5,3 +5,10 @@ python-dotenv>=1.0
 # data in mlb_props/. Not required for odds_monitor or for `--mock` runs.
 # pybaseball>=2.2.7
 # pandas>=2.0
+
+# Optional - only needed for --pdf-out (see mlb_props/pdf_report.py). The
+# mlb-props-report workflow installs this every run so the daily PDF is
+# always produced; a run without it just skips the PDF (see
+# mlb_props_main.py's --pdf-out handling) and still writes the text/HTML
+# reports normally.
+# reportlab>=4.0

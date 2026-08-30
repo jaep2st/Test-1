@@ -61,6 +61,7 @@ from mlb_props.market import MockMlbPropsOddsProvider, NoOddsProvider
 from mlb_props.matchup import MatchupProvider, MockMatchupProvider, PybaseballMatchupProvider
 from mlb_props.html_report import render_html_report
 from mlb_props.pipeline import run_pipeline
+from mlb_props.pdf_report import render_pdf_report
 from mlb_props.report import render_report
 from mlb_props.schedule import MLB_STATS_API_BASE, MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
 from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider
@@ -375,6 +376,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--out", default=None, help="Write the console-text report to this file instead of (or in addition to) stdout.")
     parser.add_argument("--html-out", default=None, help="Also write a self-contained styled HTML report to this file (see mlb_props/html_report.py).")
     parser.add_argument(
+        "--pdf-out",
+        default=None,
+        help="Also write a print-ready PDF report to this file, including real per-game clearance rates "
+        "(see mlb_props/pdf_report.py). Requires `pip install reportlab`.",
+    )
+    parser.add_argument(
         "--live-odds-scan",
         action="store_true",
         help="Skip the normal model/report pipeline entirely and instead scan already-started games' live odds "
@@ -476,6 +483,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         with open(args.html_out, "w") as f:
             f.write(html_text)
         logger.info("Wrote HTML report to %s", args.html_out)
+    if args.pdf_out:
+        try:
+            render_pdf_report(report, args.pdf_out, top=args.top, is_mock=args.mock)
+        except RuntimeError as exc:
+            # Missing reportlab shouldn't fail an otherwise-successful run -
+            # same "optional data source, graceful fallback" posture as
+            # every other optional integration in this project (Ballpark
+            # Pal, live odds). The text/HTML reports above already wrote
+            # successfully by this point.
+            logger.warning("Skipped PDF report: %s", exc)
+        else:
+            logger.info("Wrote PDF report to %s", args.pdf_out)
     return 0
 
 
