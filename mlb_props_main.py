@@ -48,6 +48,12 @@ from odds_monitor.providers.betstamp import BetstampProvider
 from odds_monitor.providers.fallback import FallbackOddsProvider
 from odds_monitor.providers.theoddsapi import TheOddsApiProvider
 
+from mlb_props.ballparkpal import (
+    BallparkPalProvider,
+    LiveBallparkPalProvider,
+    MockBallparkPalProvider,
+    NoBallparkPalProvider,
+)
 from mlb_props.context import LiveParkWeatherProvider, MockParkWeatherProvider, ParkWeatherProvider
 from mlb_props.hot_streak import HotStreakProvider, MockHotStreakProvider, StatcastHotStreakProvider
 from mlb_props.market import MockMlbPropsOddsProvider, NoOddsProvider
@@ -101,7 +107,8 @@ def build_providers(args: argparse.Namespace):
         odds: OddsProvider = MockMlbPropsOddsProvider(
             batters=all_batters, events_by_batter=events_by_batter, seed=args.mock_seed
         )
-        return schedule, statcast, matchup, hot_streak, park_weather, odds
+        ballparkpal: BallparkPalProvider = MockBallparkPalProvider(seed=args.mock_seed)
+        return schedule, statcast, matchup, hot_streak, park_weather, odds, ballparkpal
 
     year = args.year or args.game_date.year
     schedule = MlbStatsApiScheduleProvider()
@@ -144,7 +151,17 @@ def build_providers(args: argparse.Namespace):
             "only, with no market price or EV%%, until a key is set."
         )
         odds = NoOddsProvider()
-    return schedule, statcast, matchup, hot_streak, park_weather, odds
+
+    ballparkpal_key = args.ballparkpal_api_key or os.environ.get("BALLPARKPAL_API_KEY")
+    if ballparkpal_key:
+        ballparkpal = LiveBallparkPalProvider(api_key=ballparkpal_key)
+    else:
+        # Optional enhancement, not a required data source (unlike odds):
+        # degrades to this project's own existing static park-factor table
+        # + Open-Meteo estimate, unchanged - no warning needed, since most
+        # runs simply won't have this key configured.
+        ballparkpal = NoBallparkPalProvider()
+    return schedule, statcast, matchup, hot_streak, park_weather, odds, ballparkpal
 
 
 def run_live_odds_scan(odds_api_key: str, books: Optional[List[str]]) -> str:
@@ -283,6 +300,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--api-key", default=None, help="Betstamp API key (or set BETSTAMP_API_KEY), used if no Odds API key is configured. Not needed with --mock.")
     parser.add_argument("--books", action="append", default=None, help="Restrict to specific sportsbook IDs (repeatable).")
+    parser.add_argument(
+        "--ballparkpal-api-key",
+        default=None,
+        help="Ballpark Pal API key (or set BALLPARKPAL_API_KEY) - optional real per-hitter park+weather "
+        "factor upgrade over the built-in static table/Open-Meteo estimate. Not needed with --mock; "
+        "without it, scoring falls back to the existing behavior unchanged.",
+    )
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Logging verbosity.")
     parser.add_argument("--out", default=None, help="Write the console-text report to this file instead of (or in addition to) stdout.")
     parser.add_argument("--html-out", default=None, help="Also write a self-contained styled HTML report to this file (see mlb_props/html_report.py).")
@@ -332,7 +356,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     try:
-        schedule, statcast, matchup, hot_streak, park_weather, odds = build_providers(args)
+        schedule, statcast, matchup, hot_streak, park_weather, odds, ballparkpal = build_providers(args)
     except ValueError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
@@ -348,6 +372,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         extra_batters=args.batters,
         min_ev_percent=args.min_ev,
         max_candidates=args.max_candidates,
+        ballparkpal=ballparkpal,
     )
     text = render_report(report, top=args.top)
 

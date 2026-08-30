@@ -46,6 +46,7 @@ Real mode needs several free-but-separate data sources wired together:
 | Recent form (last 7/15/30 days) | Baseball Savant pitch logs, via `pybaseball` | No |
 | Ballpark factors + live wind/temperature | Static table + Open-Meteo | No |
 | Cross-book player-prop odds | The Odds API (free tier, self-serve key) | Yes (props run model-only without it) |
+| Real per-hitter park + weather factor (optional upgrade) | Ballpark Pal API | Optional - falls back to the static table + Open-Meteo above without it |
 
 ```bash
 pip install pybaseball pandas   # only needed for real (non --mock) Statcast/matchup/form data
@@ -103,7 +104,10 @@ One-time setup:
    secret** -> name it `ODDS_API_KEY` -> paste your free key from
    https://the-odds-api.com. (Skip this to publish a model-only report with
    no odds/EV columns. A `BETSTAMP_API_KEY` secret works too, as an
-   alternative.)
+   alternative.) Optionally, also add a `BALLPARKPAL_API_KEY` secret (from
+   ballparkpal.com's own API Access page) to upgrade park/weather scoring
+   with real per-hitter modeled factors - the report runs the same without
+   it, just with the built-in static table + Open-Meteo estimate instead.
 2. **Settings -> Pages -> Build and deployment -> Source: "GitHub
    Actions"**.
 3. **Actions tab -> "MLB props report" -> Run workflow** to publish the
@@ -171,6 +175,7 @@ HTML) as well, so they travel with the output itself, not just this doc:
 | `--top` | `15` | Max rows per section |
 | `--odds-api-key` | `$ODDS_API_KEY` | The Odds API key, checked first (omit both this and `--api-key` for a model-only report, no odds) |
 | `--api-key` | `$BETSTAMP_API_KEY` | Betstamp API key, used if no Odds API key is set |
+| `--ballparkpal-api-key` | `$BALLPARKPAL_API_KEY` | Optional Ballpark Pal API key - real per-hitter park+weather factor upgrade (see `mlb_props/ballparkpal.py`); scoring is unchanged without it |
 | `--books` | all | Restrict to specific sportsbook IDs (repeatable) |
 | `--out` | none | Also write the console-text report to this file |
 | `--html-out` | none | Also write the styled HTML report to this file |

@@ -1,5 +1,6 @@
 from datetime import date
 
+from mlb_props.ballparkpal import BallparkPalProvider, HitterParkFactor
 from mlb_props.context import MockParkWeatherProvider
 from mlb_props.hot_streak import MockHotStreakProvider
 from mlb_props.market import MockMlbPropsOddsProvider
@@ -10,7 +11,7 @@ from mlb_props.schedule import MockScheduleProvider
 from mlb_props.statcast import MockStatcastProvider
 
 
-def _run(seed=1, min_ev_percent=0.0):
+def _run(seed=1, min_ev_percent=0.0, ballparkpal=None):
     schedule = MockScheduleProvider()
     slate = schedule.get_slate(date(2026, 8, 26))
     events_by_batter = {}
@@ -30,6 +31,7 @@ def _run(seed=1, min_ev_percent=0.0):
         park_weather=MockParkWeatherProvider(seed=seed),
         odds=MockMlbPropsOddsProvider(batters=all_batters, events_by_batter=events_by_batter, seed=seed),
         min_ev_percent=min_ev_percent,
+        ballparkpal=ballparkpal,
     )
 
 
@@ -105,5 +107,64 @@ def test_pipeline_is_deterministic_with_same_seed():
     report_a = _run(seed=42)
     report_b = _run(seed=42)
     assert [e.player for e in report_a.hr_edges] == [e.player for e in report_b.hr_edges]
+
+
+class _FakeBallparkPalProvider(BallparkPalProvider):
+    """Returns a real, known factor for exactly one player - lets a test
+    prove the override actually reaches the final report instead of just
+    trusting the wiring.
+    """
+
+    def __init__(self, player: str, factor: HitterParkFactor):
+        self._key = player.strip().lower()
+        self._factor = factor
+
+    def get_hitter_park_factor(self, player, game_date):
+        return self._factor if player.strip().lower() == self._key else None
+
+
+def test_ballparkpal_factor_overrides_weather_boost_for_that_batter_only():
+    # Aaron Judge is a real MockScheduleProvider batter (New York Yankees @
+    # Baltimore Orioles). A distinctive weather value (10.0%) that couldn't
+    # plausibly come from MockParkWeatherProvider's own randomized range by
+    # coincidence proves the override actually took effect on his result.
+    override = HitterParkFactor(player_name="Aaron Judge", home_runs=1.20, home_runs_stadium=1.10, home_runs_weather=0.10)
+    report = _run(seed=1, ballparkpal=_FakeBallparkPalProvider("Aaron Judge", override))
+
+    judge_edges = [e for e in report.hr_edges + report.tb_edges if e.player == "Aaron Judge"]
+    assert judge_edges
+    for edge in judge_edges:
+        assert edge.weather_boost_pct == 10.0
+
+    # Nobody else on the slate should be affected - the fake provider only
+    # has data for Aaron Judge, and everyone else must fall back to
+    # MockParkWeatherProvider's own (seeded, non-10.0) value unchanged.
+    others = [e for e in report.hr_edges + report.tb_edges if e.player != "Aaron Judge"]
+    assert others
+    assert any(e.weather_boost_pct != 10.0 for e in others)
+
+
+def test_no_ballparkpal_provider_leaves_scoring_unchanged():
+    # Default (ballparkpal=None) must behave identically to the pipeline
+    # before this integration existed - same seed, same result.
+    with_default = _run(seed=7)
+    without_arg = run_pipeline(
+        game_date=date(2026, 8, 26),
+        schedule=MockScheduleProvider(),
+        statcast=MockStatcastProvider(seed=7),
+        matchup_provider=MockMatchupProvider(seed=7),
+        hot_streak=MockHotStreakProvider(seed=7),
+        park_weather=MockParkWeatherProvider(seed=7),
+        odds=MockMlbPropsOddsProvider(
+            batters=[b for g in MockScheduleProvider().get_slate(date(2026, 8, 26)) for b in g.away_batters + g.home_batters],
+            events_by_batter={
+                b: f"{g.away_team} @ {g.home_team}"
+                for g in MockScheduleProvider().get_slate(date(2026, 8, 26))
+                for b in g.away_batters + g.home_batters
+            },
+            seed=7,
+        ),
+    )
+    assert [e.weather_boost_pct for e in with_default.hr_edges] == [e.weather_boost_pct for e in without_arg.hr_edges]
 
 

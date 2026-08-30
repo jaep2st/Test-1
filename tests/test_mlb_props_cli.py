@@ -18,11 +18,13 @@ def test_mlb_props_cli_missing_api_key_degrades_gracefully(monkeypatch, caplog):
     # the missing-key path is a warning, not a hard failure.
     monkeypatch.delenv("ODDS_API_KEY", raising=False)
     monkeypatch.delenv("BETSTAMP_API_KEY", raising=False)
+    monkeypatch.delenv("BALLPARKPAL_API_KEY", raising=False)
     from mlb_props_main import build_providers, parse_args
 
     args = parse_args(["--date", "2026-08-26"])
-    schedule, statcast, matchup, hot_streak, park_weather, odds = build_providers(args)
+    schedule, statcast, matchup, hot_streak, park_weather, odds, ballparkpal = build_providers(args)
     assert odds.fetch_player_props("mlb") == []
+    assert ballparkpal.get_hitter_park_factor("Aaron Judge", args.game_date) is None
 
 
 def test_parse_args_defaults():
