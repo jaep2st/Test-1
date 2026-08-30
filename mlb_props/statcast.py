@@ -9,14 +9,14 @@ Real data comes from Baseball Savant via the `pybaseball` package:
   for xwOBA, xSLG, xBA (contact-quality-adjusted outcomes, less luck-driven
   than actual results).
 - `statcast_pitcher(start, end, player_id)` (pitch-level Baseball Savant log)
-  for pitch-mix, throwing hand, and HR/9 + HR/FB% allowed - all derived
-  directly from real batted-ball events, not FanGraphs (whose `pitching_stats`
-  leaderboard is blocked outright from some hosting providers, e.g. GitHub
-  Actions runners hit 403s scraping it).
+  for pitch-mix, throwing hand, and HR/9 + HR/FB% + K% allowed - all derived
+  directly from real batted-ball/plate-appearance events, not FanGraphs
+  (whose `pitching_stats` leaderboard is blocked outright from some hosting
+  providers, e.g. GitHub Actions runners hit 403s scraping it).
 - `statcast_batter(start, end, player_id)` (pitch-level Baseball Savant log,
-  batter side) for a batter's own real HR/FB% - see `enrich_batted_ball()`,
-  called only for the phase-2 prefiltered candidates in pipeline.py, not
-  every roster batter.
+  batter side) for a batter's own real HR/FB% and K% - see
+  `enrich_batted_ball()`, called only for the phase-2 prefiltered candidates
+  in pipeline.py, not every roster batter.
 
 `pybaseball` and `pandas` are optional dependencies - only required for
 `PybaseballStatcastProvider`. `MockStatcastProvider` needs neither and is
@@ -97,6 +97,15 @@ class BatterProfile:
     iso: float  # isolated power = SLG - AVG
     xwoba: float
     xslg: float
+    # Strikeout rate, % of plate appearances - the real signal `compute_hits_score`
+    # was missing entirely until this field existed (see scoring.py's note on
+    # HITS_WEIGHTS). Defaulted here since neither Savant leaderboard used by
+    # `batter_profile()` carries it; filled with a real per-batter value in
+    # `enrich_batted_ball()`, the same phase-2-only pitch-level fetch that
+    # already computes `hr_fb_pct`. Defaults to 0.0 (not enriched yet), same
+    # convention as `hr_fb_pct` before phase 2 runs - never treat an
+    # un-enriched 0.0 as "never strikes out."
+    k_pct: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -115,6 +124,14 @@ class PitcherProfile:
     xwoba_allowed: float
     xslg_allowed: float
     pitch_mix: Dict[str, float]  # e.g. {"FF": 0.42, "SL": 0.24, "CH": 0.14, ...} usage shares, sum ~1.0
+    # This pitcher's own strikeout rate, % of plate appearances faced - the
+    # other half of the Hits-score strikeout blind spot (see BatterProfile.k_pct
+    # and scoring.py's HITS_WEIGHTS note). Computed in `_pitcher_arsenal()`
+    # from the same pitch-level Statcast log already fetched there for
+    # pitch-mix/throws/HR9, at no extra network cost. Defaults to 0.0 when
+    # that fetch fails or returns nothing usable - same "missing, not really
+    # zero" caveat as `hr_per_9` before the same fetch was added for it.
+    k_pct_allowed: float = 0.0
 
 
 class StatcastProvider(ABC):
@@ -188,6 +205,7 @@ class PybaseballStatcastProvider(StatcastProvider):
         self._throws_cache: Dict[str, Optional[str]] = {}
         self._hr9_cache: Dict[str, float] = {}
         self._hr_fb_allowed_cache: Dict[str, float] = {}
+        self._k_pct_allowed_cache: Dict[str, float] = {}
         # A team's ~9 roster batters all share the same 1-2 probable
         # pitchers, so without memoizing by name, pitcher_profile() (now a
         # non-trivial fetch, with the pitch-mix lookup below) would redo
@@ -286,11 +304,20 @@ class PybaseballStatcastProvider(StatcastProvider):
         self._pitcher_profile_cache[player] = result
         return result
 
+    # `events` values that end a plate appearance in a strikeout - Statcast
+    # logs a double-play strikeout (batter K's, another runner out on the
+    # same play) as its own event string, not as a plain "strikeout".
+    _STRIKEOUT_EVENTS = frozenset({"strikeout", "strikeout_double_play"})
+
     def enrich_batted_ball(self, batter: BatterProfile) -> BatterProfile:
-        """Fills in `hr_fb_pct` (real HR-per-fly-ball rate) from a per-batter
-        Statcast pitch-level log - the same real HR/fly-ball computation
-        already proven for pitchers in `_pitcher_arsenal`, applied here to
-        the batter's own batted balls instead of what they allowed.
+        """Fills in `hr_fb_pct` (real HR-per-fly-ball rate) and `k_pct` (real
+        strikeout rate) from one per-batter Statcast pitch-level log fetch -
+        the same real-events computation already proven for pitchers in
+        `_pitcher_arsenal`, applied here to the batter's own plate
+        appearances instead of what they allowed. `k_pct` closes the real
+        data gap `scoring.py`'s HITS_WEIGHTS note used to describe: getting
+        a hit is driven heavily by contact rate, and this is the actual
+        per-batter number for it, not a guess.
 
         Deliberately NOT called from `batter_profile()`: that method runs
         for every roster batter in pipeline.py's cheap phase-1 prefilter
@@ -318,17 +345,22 @@ class PybaseballStatcastProvider(StatcastProvider):
             if pitches is None or pitches.empty or "events" not in pitches.columns:
                 return batter
             pa_rows = pitches[pitches["events"].notna()]
-            if pa_rows.empty or "bb_type" not in pa_rows.columns:
+            if pa_rows.empty:
                 return batter
-            fb_count = int((pa_rows["bb_type"] == "fly_ball").sum())
-            if not fb_count:
-                return batter
-            hr_count = int((pa_rows["events"] == "home_run").sum())
-            hr_fb = round(hr_count / fb_count * 100, 1)
-            return replace(batter, hr_fb_pct=hr_fb)
+            pa_count = len(pa_rows)
+            k_count = int(pa_rows["events"].isin(self._STRIKEOUT_EVENTS).sum())
+            updates = {"k_pct": round(k_count / pa_count * 100, 1)}
+            if "bb_type" in pa_rows.columns:
+                fb_count = int((pa_rows["bb_type"] == "fly_ball").sum())
+                if fb_count:
+                    hr_count = int((pa_rows["events"] == "home_run").sum())
+                    updates["hr_fb_pct"] = round(hr_count / fb_count * 100, 1)
+            return replace(batter, **updates)
         except Exception:
             logger.warning(
-                "Batted-ball enrichment failed for %r - hr_fb_pct stays at its default", batter.player, exc_info=True
+                "Batted-ball enrichment failed for %r - hr_fb_pct/k_pct stay at their defaults",
+                batter.player,
+                exc_info=True,
             )
             return batter
 
@@ -339,7 +371,7 @@ class PybaseballStatcastProvider(StatcastProvider):
     # class don't carry innings-pitched at all (confirmed live).
     _PA_PER_9_INNINGS = 38.3
 
-    def _pitcher_arsenal(self, pyb, player: str) -> "tuple[Dict[str, float], Optional[str], float, float]":
+    def _pitcher_arsenal(self, pyb, player: str) -> "tuple[Dict[str, float], Optional[str], float, float, float]":
         """Everything about a pitcher that isn't on the exitvelo/expected-
         stats leaderboards, all pulled from one fetch of their own season
         of Statcast pitch-level data and cached together:
@@ -356,6 +388,10 @@ class PybaseballStatcastProvider(StatcastProvider):
           estimate is real, if approximate (PA/9 varies somewhat by role
           and league).
         - HR/FB% allowed, computed the same way from batted-ball type.
+        - K% allowed (this pitcher's own strikeout rate), the other half of
+          the Hits-score strikeout blind spot described on `BatterProfile
+          .k_pct` and `scoring.py`'s HITS_WEIGHTS note - same "events"
+          column, no extra fetch.
         Best-effort throughout: any piece that can't be computed just
         means that component defaults to neutral, same as any other
         missing signal.
@@ -366,11 +402,13 @@ class PybaseballStatcastProvider(StatcastProvider):
                 self._throws_cache.get(player),
                 self._hr9_cache.get(player, 0.0),
                 self._hr_fb_allowed_cache.get(player, 0.0),
+                self._k_pct_allowed_cache.get(player, 0.0),
             )
         mix: Dict[str, float] = {}
         throws: Optional[str] = None
         hr9 = 0.0
         hr_fb_allowed = 0.0
+        k_pct_allowed = 0.0
         try:
             player_id = lookup_mlbam_id(pyb, player, self._id_cache)
             if player_id is not None:
@@ -391,17 +429,24 @@ class PybaseballStatcastProvider(StatcastProvider):
                         hr_count = int((pa_rows["events"] == "home_run").sum())
                         if pa_count:
                             hr9 = round((hr_count / pa_count) * self._PA_PER_9_INNINGS, 3)
+                            k_count = int(pa_rows["events"].isin(self._STRIKEOUT_EVENTS).sum())
+                            k_pct_allowed = round(k_count / pa_count * 100, 1)
                         if "bb_type" in pa_rows.columns:
                             fb_count = int((pa_rows["bb_type"] == "fly_ball").sum())
                             if fb_count:
                                 hr_fb_allowed = round(hr_count / fb_count * 100, 1)
         except Exception:
-            logger.warning("Pitch-arsenal fetch failed for %r - pitch_mix/throws/HR9 will default to neutral", player, exc_info=True)
+            logger.warning(
+                "Pitch-arsenal fetch failed for %r - pitch_mix/throws/HR9/K%% will default to neutral",
+                player,
+                exc_info=True,
+            )
         self._pitch_mix_cache[player] = mix
         self._throws_cache[player] = throws
         self._hr9_cache[player] = hr9
         self._hr_fb_allowed_cache[player] = hr_fb_allowed
-        return mix, throws, hr9, hr_fb_allowed
+        self._k_pct_allowed_cache[player] = k_pct_allowed
+        return mix, throws, hr9, hr_fb_allowed, k_pct_allowed
 
     def _pitcher_profile_uncached(self, player: str) -> Optional[PitcherProfile]:
         pyb = self._pyb()
@@ -436,7 +481,7 @@ class PybaseballStatcastProvider(StatcastProvider):
         # HR/9 at 0.0. Both are now derived from the same statcast_pitcher()
         # pitch-level log already fetched for pitch-mix/throws below, at no
         # extra network cost and with no FanGraphs dependency.
-        pitch_mix, real_throws, hr9, hr_fb_allowed = self._pitcher_arsenal(pyb, player)
+        pitch_mix, real_throws, hr9, hr_fb_allowed, k_pct_allowed = self._pitcher_arsenal(pyb, player)
         fallback_throws = str(row.get("pitch_hand", row.get("p_throws", "R")))[:1] or "R"
 
         try:
@@ -453,6 +498,7 @@ class PybaseballStatcastProvider(StatcastProvider):
                 xwoba_allowed=float(self._pick(exp_row, "xwoba") or 0.0),
                 xslg_allowed=float(self._pick(exp_row, "xslg") or 0.0),
                 pitch_mix=pitch_mix,
+                k_pct_allowed=k_pct_allowed,
             )
         except (KeyError, TypeError, ValueError):
             logger.exception("Could not parse Statcast pitcher row for %r - check _COLUMN_ALIASES", player)
@@ -477,6 +523,7 @@ class MockStatcastProvider(StatcastProvider):
         iso=(0.100, 0.320),
         xwoba=(0.290, 0.430),
         xslg=(0.360, 0.650),
+        k_pct=(12.0, 32.0),
     )
     _REALISTIC_PITCHER_RANGES = dict(
         barrel_pct_allowed=(3.0, 12.0),
@@ -486,6 +533,7 @@ class MockStatcastProvider(StatcastProvider):
         hr_fb_pct_allowed=(6.0, 18.0),
         xwoba_allowed=(0.280, 0.360),
         xslg_allowed=(0.360, 0.470),
+        k_pct_allowed=(15.0, 32.0),
     )
 
     def __init__(self, seed: Optional[int] = None):
@@ -517,6 +565,7 @@ class MockStatcastProvider(StatcastProvider):
             iso=self._rand_range(*r["iso"]),
             xwoba=self._rand_range(*r["xwoba"]),
             xslg=self._rand_range(*r["xslg"]),
+            k_pct=self._rand_range(*r["k_pct"]),
         )
 
     def pitcher_profile(self, player: str) -> Optional[PitcherProfile]:
@@ -538,4 +587,5 @@ class MockStatcastProvider(StatcastProvider):
             xwoba_allowed=self._rand_range(*r["xwoba_allowed"]),
             xslg_allowed=self._rand_range(*r["xslg_allowed"]),
             pitch_mix=mix,
+            k_pct_allowed=self._rand_range(*r["k_pct_allowed"]),
         )

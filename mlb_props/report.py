@@ -131,5 +131,17 @@ def render_report(report: SlateReport, top: int = 15) -> str:
         "Model scores are a transparent heuristic (see mlb_props/scoring.py), not a",
         "calibrated prediction - cross-check against the market's own no-vig consensus",
         "(the 'Mkt Fair' column) and your own judgment before betting anything.",
+        "",
+        "DATA QUALITY NOTES (permanent, applies every run):",
+        "- 'EV%' means model vs. market, not 'market is wrong.' Every EV% figure is",
+        "  our model's probability compared against the book's own no-vig fair price.",
+        "  A positive EV% is our model disagreeing with the market in the bettor's",
+        "  favor, not proof the market is mispriced - it could just as easily be right",
+        "  and our model wrong. Weigh it as one informed opinion against another.",
+        "- Pull-air% is permanently unavailable for the HR score (6% of its weight).",
+        "  Neither Baseball Savant leaderboard this project pulls carries a pull-rate",
+        "  column, and FanGraphs (which does) returns 403 from this hosting provider.",
+        "  That component defaults to 0 for every player, every run - a disclosed",
+        "  gap, not a hidden zero.",
     ]
     return "\n".join(sections)

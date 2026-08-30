@@ -123,11 +123,12 @@ maps that score onto a heuristic model probability calibrated to realistic
 MLB base rates (~10% average HR-per-game, ~42% average 2+ total-bases game,
 ~66% average 1+ hit game). That's **not** a trained/calibrated model - it's a
 directional estimate you cross-check against the market. The 1+ hits score
-has a known blind spot worth knowing before trusting it: it has no batter or
-pitcher strikeout-rate data to draw on (see `compute_hits_score`'s docstring),
-so a high-power, high-strikeout slugger can score better than a genuinely
-better "gets a hit" bet this model can't tell apart from an average one on
-that axis. Two independent signals drive the ranking:
+uses real per-batter and per-pitcher strikeout rate (`batter_k_pct` /
+`pitcher_k_pct_allowed` in `HITS_WEIGHTS` - see `compute_hits_score`'s
+docstring), derived from the same pitch-level Statcast log already fetched
+for `hr_fb_pct`/pitch-mix, at no extra network cost; it's a season-long rate,
+not a whiff rate specific to that night's exact pitch-mix matchup, but it's a
+real number, not a blind spot. Two independent signals drive the ranking:
 
 1. **Model edge**: does our score say this player's probability is higher
    than what the best available price actually pays for?
@@ -138,6 +139,24 @@ that axis. Two independent signals drive the ranking:
 A prop flagged by both is the strongest kind of spot. Every row in the
 report shows both EV%s plus the number of books used for the consensus, so
 you can judge how much to trust the edge yourself.
+
+### Data quality notes (permanent, applies to every run)
+
+These two are printed at the bottom of every generated report (text and
+HTML) as well, so they travel with the output itself, not just this doc:
+
+- **"EV%" means model vs. market, not "the market is wrong."** Every EV%
+  figure is our model's probability compared against the book's own no-vig
+  fair price. A positive EV% means our model disagrees with the market in
+  the bettor's favor - it is not proof the market is mispriced. The market
+  could just as easily be right and the model wrong. Treat it as one
+  informed opinion set against another, not a guaranteed edge.
+- **Pull-air% is permanently unavailable for the HR score (6% of its
+  weight).** Neither Baseball Savant leaderboard this project pulls carries
+  a pull-rate column, and FanGraphs (which does) returns 403 to every
+  request from this environment's hosting provider (GitHub Actions). That
+  component defaults to 0 for every player, every run - a disclosed gap,
+  not a hidden zero.
 
 ### MLB props CLI options
 

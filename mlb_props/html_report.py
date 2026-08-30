@@ -362,7 +362,7 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
   </section>
 
   <section class="section">
-    {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price - no batter/pitcher strikeout-rate data feeds this score, see the weights note below", hits, "Model P(1+ Hits)", top)}
+    {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price", hits, "Model P(1+ Hits)", top)}
   </section>
 
   <section class="section">
@@ -373,7 +373,7 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     <div class="method-grid">
       <div class="method-card"><h3>Home run score (weights)</h3>{_weight_rows(HR_WEIGHTS)}</div>
       <div class="method-card"><h3>2+ total bases score (weights)</h3>{_weight_rows(TB_WEIGHTS)}</div>
-      <div class="method-card"><h3>1+ hits score (weights)</h3>{_weight_rows(HITS_WEIGHTS)}<p class="hint" style="margin-top:8px;">No strikeout/contact-rate data available (see scoring.py) - power-heavy, high-strikeout hitters may score better here than they should.</p></div>
+      <div class="method-card"><h3>1+ hits score (weights)</h3>{_weight_rows(HITS_WEIGHTS)}<p class="hint" style="margin-top:8px;">"Batter K%" and "Pitcher K% Allowed" are real per-player strikeout rates (see scoring.py) - a season-long rate stat, not a whiff rate specific to tonight's exact pitch-mix matchup.</p></div>
     </div>
     <div class="sources">
       <span class="source-chip">Statcast batted-ball quality &rarr; pybaseball / Baseball Savant</span>
@@ -389,6 +389,9 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     <p><strong>Weather is a first-class input:</strong> each pick's wind (mph, in/out) and temperature feed a heuristic HR-odds shift, weighted directly into both scores (8% of the HR score, 5% of the 2+ TB score) and shown per-pick in the Weather column.</p>
     <p><strong>Model score &ne; prediction.</strong> It's a transparent, hand-weighted heuristic calibrated to realistic MLB base rates, meant to be cross-checked against the market's own no-vig consensus (Market fair column) - not treated as ground truth.</p>
     <p>"Model + market agree" rows are where our fundamentals and the market's own cross-book pricing both say a price is generous; "model only" rows lean on our score alone and warrant more scrutiny.</p>
+    <p><strong>Data quality notes (permanent, applies every run):</strong></p>
+    <p>&middot; <strong>"EV%" means model vs. market, not "market is wrong."</strong> Every EV% figure is our model's probability compared against the book's own no-vig fair price. A positive EV% is our model disagreeing with the market in the bettor's favor, not proof the market is mispriced - the market could just as easily be right and our model wrong. Weigh it as one informed opinion against another, not a guarantee.</p>
+    <p>&middot; <strong>Pull-air% is permanently unavailable for the HR score (6% of its weight).</strong> Neither Baseball Savant leaderboard this project pulls carries a pull-rate column, and FanGraphs (which does) returns 403 to every request from this environment's hosting provider. That component defaults to 0 for every player, every run - a real, disclosed gap, not a hidden zero.</p>
   </footer>
 </div>
 </body>
