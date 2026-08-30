@@ -135,6 +135,26 @@ class LiveBallparkPalProvider(BallparkPalProvider):
                     )
                 except (KeyError, TypeError):
                     logger.warning("Skipping unparsable Ballpark Pal park-factor row: %r", row)
+
+            # Confirmed live 2026-08-30: a real request against this
+            # endpoint returned HTTP 200 with no parse warnings, yet ended
+            # up with zero usable rows here (every score that run fell back
+            # to the pre-existing static table unchanged). That's silent
+            # unless logged explicitly - a raw sample of the actual payload
+            # is the fastest way to see what shape/timing issue caused it
+            # (e.g. rows keyed under a name this parser didn't try, or a
+            # date where Ballpark Pal simply has no data yet) without
+            # guessing again.
+            if not result:
+                logger.warning(
+                    "Ballpark Pal parkfactors/hitters returned 0 usable rows for %s (HTTP 200, %d raw rows seen) - "
+                    "raw payload sample: %r",
+                    game_date,
+                    len(rows),
+                    str(payload)[:2000],
+                )
+            else:
+                logger.info("Ballpark Pal parkfactors/hitters: %d real per-hitter factors for %s", len(result), game_date)
         except Exception:
             logger.exception("Ballpark Pal parkfactors/hitters fetch failed for %s", game_date)
 
