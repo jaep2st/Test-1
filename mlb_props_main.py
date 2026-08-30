@@ -49,6 +49,7 @@ from odds_monitor.providers.fallback import FallbackOddsProvider
 from odds_monitor.providers.theoddsapi import TheOddsApiProvider
 
 from mlb_props.ballparkpal import (
+    BALLPARKPAL_API_BASE,
     BallparkPalProvider,
     LiveBallparkPalProvider,
     MockBallparkPalProvider,
@@ -223,6 +224,69 @@ def run_live_odds_scan(odds_api_key: str, books: Optional[List[str]]) -> str:
     return "\n".join(out)
 
 
+def run_ballparkpal_matchups_check(game_date: date, api_key: str) -> str:
+    """Standalone diagnostic for `--ballparkpal-matchups-check`: resolves a
+    real, unstated question about Ballpark Pal's `/api/v1/matchups`
+    endpoint - are `homeRunProbability`/`strikeoutProbability`/etc. per-
+    plate-appearance or per-game? Not stated anywhere in Ballpark Pal's own
+    API docs (read manually - see mlb_props/ballparkpal.py's module
+    docstring for why), and that integration deliberately doesn't use this
+    endpoint yet because guessing wrong here would silently make two
+    models that actually agree look like they wildly disagree.
+
+    `strikeoutProbability` is the cleanest real-world yardstick available:
+    MLB's actual league-average strikeout rate is famously ~22% per plate
+    appearance vs. ~60-65% per game (P(at least one K) across a real
+    ~4 PA/game). Whichever range the real numbers cluster around settles
+    the question decisively - no guessing required.
+    """
+    import statistics
+
+    session = build_retrying_session()
+    resp = session.get(
+        f"{BALLPARKPAL_API_BASE}/matchups",
+        params={"date": game_date.isoformat(), "parkAdjusted": "true"},
+        headers={"X-API-Key": api_key},
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    rows = payload.get("data", payload)
+    if isinstance(rows, dict):
+        rows = rows.get("items", rows.get("hitters", rows.get("rows", rows.get("data", []))))
+
+    out: List[str] = [f"BALLPARK PAL MATCHUPS CHECK (probability basis) - {game_date.isoformat()}", ""]
+    if not isinstance(rows, list) or not rows:
+        out.append(f"No usable rows (raw payload sample): {str(payload)[:1500]}")
+        return "\n".join(out)
+
+    out.append(f"{len(rows)} real batter-vs-starter matchup rows returned.")
+    out.append("")
+    for field in ("homeRunProbability", "strikeoutProbability", "walkProbability", "singleProbability"):
+        values = [row[field] for row in rows if row.get(field) is not None]
+        if not values:
+            out.append(f"{field}: no non-null values in this response")
+            continue
+        out.append(
+            f"{field}: n={len(values)} min={min(values):.1f} max={max(values):.1f} "
+            f"mean={statistics.mean(values):.1f} median={statistics.median(values):.1f}"
+        )
+    out.append("")
+    out.append(
+        "Read: strikeoutProbability mean near ~20-25% => per-plate-appearance basis "
+        "(matches real MLB's ~22% league-average K rate per PA). Mean near ~55-70% => "
+        "per-game basis (matches P(at least one K) across a real ~4 PA/game)."
+    )
+    out.append("")
+    out.append("Sample rows, highest homeRunProbability first:")
+    for row in sorted(rows, key=lambda r: r.get("homeRunProbability") or -1, reverse=True)[:8]:
+        out.append(
+            f"  - {row.get('batterName')} vs {row.get('pitcherName')}: HR={row.get('homeRunProbability')} "
+            f"K={row.get('strikeoutProbability')} BB={row.get('walkProbability')} 1B={row.get('singleProbability')}"
+        )
+    return "\n".join(out)
+
+
 def run_game_status_check(game_date: date) -> str:
     """Standalone diagnostic for `--game-status-check`: pulls MLB's own
     authoritative real-time game status (Scheduled/In Progress/Final, with
@@ -326,6 +390,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "actually already started (see theoddsapi.py's commence_time-based filter, which relies on a "
         "third-party copy of this same information and has been confirmed wrong for at least one real game).",
     )
+    parser.add_argument(
+        "--ballparkpal-matchups-check",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead fetch Ballpark Pal's "
+        "/api/v1/matchups for --date and print summary statistics (min/max/mean) for its probability "
+        "fields - resolves whether they're per-plate-appearance or per-game (undocumented) by comparing "
+        "strikeoutProbability against real MLB base rates. Requires --ballparkpal-api-key/BALLPARKPAL_API_KEY. "
+        "Diagnostic only - see mlb_props/ballparkpal.py for why this endpoint isn't used in scoring yet.",
+    )
     return parser.parse_args(argv)
 
 
@@ -340,6 +413,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             with open(args.out, "w") as f:
                 f.write(text + "\n")
             logger.info("Wrote game status check to %s", args.out)
+        return 0
+
+    if args.ballparkpal_matchups_check:
+        ballparkpal_key = args.ballparkpal_api_key or os.environ.get("BALLPARKPAL_API_KEY")
+        if not ballparkpal_key:
+            print(
+                "Configuration error: --ballparkpal-matchups-check requires --ballparkpal-api-key or "
+                "BALLPARKPAL_API_KEY.",
+                file=sys.stderr,
+            )
+            return 2
+        text = run_ballparkpal_matchups_check(args.game_date, ballparkpal_key)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote Ballpark Pal matchups check to %s", args.out)
         return 0
 
     if args.live_odds_scan:

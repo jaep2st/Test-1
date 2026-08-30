@@ -52,6 +52,11 @@ on:
         type: boolean
         required: false
         default: false
+      ballparkpal_matchups_check:
+        description: "Also run --ballparkpal-matchups-check (diagnostic: prints summary stats for Ballpark Pal's /api/v1/matchups probability fields to resolve whether they're per-PA or per-game; printed to this job's log, not the published report). Requires BALLPARKPAL_API_KEY."
+        type: boolean
+        required: false
+        default: false
   schedule:
     # Twice daily, timed around the US MLB slate (adjust to taste - both
     # are UTC, since GitHub Actions schedule: doesn't support local time):
@@ -153,6 +158,13 @@ jobs:
           # 2026-08-29 to be wrong for at least one real game) - MLB's own
           # schedule endpoint is the actual source of truth for game state.
           python mlb_props_main.py --game-status-check --date "${{ inputs.date || 'today' }}"
+
+      - name: Check Ballpark Pal matchups probability basis
+        if: ${{ inputs.ballparkpal_matchups_check }}
+        env:
+          BALLPARKPAL_API_KEY: ${{ secrets.BALLPARKPAL_API_KEY }}
+        run: |
+          python mlb_props_main.py --ballparkpal-matchups-check --date "${{ inputs.date || 'today' }}"
 
       - uses: actions/upload-pages-artifact@v3
         with:
