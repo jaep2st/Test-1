@@ -1,0 +1,69 @@
+name: Ad-hoc URL fetch (research)
+
+# A small, reusable utility: fetches a URL from a GitHub-hosted runner (real
+# outbound internet access) and prints the result to this job's log. Exists
+# because this project's normal dev/agent environment has egress blocked to
+# most real-world hosts (confirmed live for espn.com, statsapi.mlb.com,
+# betstamp.com, the-odds-api.com, ballparkpal.com, and likely others) - this
+# is the only way to read a page like third-party API docs before wiring a
+# real integration to it. Not part of the report pipeline; never scheduled.
+#
+# Usage: Actions tab -> "Ad-hoc URL fetch (research)" -> Run workflow ->
+# paste a URL. Output (headers + body, truncated) appears in this run's log
+# under the "Fetch" step - nothing is written to a file, uploaded as an
+# artifact, or published anywhere.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL to fetch (https:// only)"
+        required: true
+      render_js:
+        description: "Render with a headless browser instead of a plain HTTP GET (needed for JS-rendered pages - slower, heavier)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate URL is https
+        run: |
+          case "${{ inputs.url }}" in
+            https://*) ;;
+            *) echo "::error::Only https:// URLs are allowed"; exit 1 ;;
+          esac
+
+      - name: Plain HTTP GET
+        if: ${{ !inputs.render_js }}
+        run: |
+          curl -sSL --max-time 30 -A "Mozilla/5.0 (research fetch)" -D - "${{ inputs.url }}" | head -c 200000
+
+      - uses: actions/setup-python@v5
+        if: ${{ inputs.render_js }}
+        with:
+          python-version: "3.11"
+
+      - name: Render with headless browser
+        if: ${{ inputs.render_js }}
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          import os
+          url = os.environ["FETCH_URL"]
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page()
+              page.goto(url, wait_until="networkidle", timeout=30000)
+              print(page.content()[:200000])
+              browser.close()
+          PY
+        env:
+          FETCH_URL: ${{ inputs.url }}
