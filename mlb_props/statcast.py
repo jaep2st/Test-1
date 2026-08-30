@@ -26,6 +26,7 @@ what `--mock` mode uses.
 from __future__ import annotations
 
 import logging
+import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from datetime import date
@@ -45,6 +46,74 @@ logger = logging.getLogger(__name__)
 # real column names on every lookup).
 _NAME_COLUMN_CANDIDATES = ("player_name", "last_name, first_name", "Name", "name")
 
+# A trailing generational suffix (Bobby Witt Jr., Fernando Tatis Jr., Ken
+# Griffey III...) breaks the naive "everything before the last word is the
+# first name" split used to build the "Last, First" candidate below - the
+# suffix itself gets treated as the last name, producing "Jr., Bobby Witt"
+# instead of the real Savant convention of attaching the suffix to the last
+# name ("Witt Jr., Bobby"). Confirmed live: every suffixed player on a real
+# slate (Witt Jr., Tatis Jr., Chisholm Jr., all real qualified everyday
+# players) silently missed every Savant leaderboard lookup before this fix,
+# despite being on that leaderboard the whole time.
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def _normalize_for_match(s: str) -> str:
+    """Lowercase, fold accents to their base form ("suárez" -> "suarez"),
+    drop periods, collapse whitespace. Applied identically to both sides
+    of every comparison - the query name and the leaderboard column - so
+    neither "Jr." vs "Jr" nor "Suárez" vs "Suarez" causes a miss a human
+    would call a match. Diacritics aren't guaranteed to survive Baseball
+    Savant's leaderboard export the same way our own lineup source (MLB
+    Stats API) keeps them, in either direction - a query with an accent
+    needs to match an unaccented leaderboard row and vice versa, so both
+    sides get folded the same way rather than only the query.
+    """
+    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+    # Periods are deleted outright, not replaced with a space: "Witt Jr.,
+    # Bobby" has a period directly against the following comma, so a
+    # space-replacement leaves a stray "jr , bobby" that a period-free
+    # candidate built as "witt jr, bobby" would never match.
+    return " ".join(s.lower().replace(".", "").split())
+
+
+def _name_lookup_candidates(player: str) -> List[str]:
+    """Every name format worth trying against a Savant leaderboard for one
+    real player name, most-likely-first - each already run through
+    `_normalize_for_match`, so accents/punctuation never need separate
+    handling here:
+    1. "first last" - the input as given, in case a frame ever uses that
+       column order directly.
+    2. "last, first" - Savant's real `last_name, first_name` format (see
+       this module's docstring), built by moving the last word to the
+       front of a comma.
+    3. Same as 2, but with a trailing suffix (Jr./Sr./II/III/IV/V) treated
+       as part of the last name rather than split off on its own - matches
+       Savant's real convention for a suffixed player (confirmed live:
+       every suffixed real player on a slate missed every lookup before
+       this fix, the suffix itself getting treated as the last name).
+    Duplicates are skipped.
+    """
+    target = _normalize_for_match(player)
+    candidates = [target]
+
+    words = target.split()
+    suffix = None
+    if len(words) >= 3 and words[-1] in _NAME_SUFFIXES:
+        suffix = words[-1]
+        words = words[:-1]
+    if len(words) >= 2:
+        first, last = " ".join(words[:-1]), words[-1]
+        last_first = f"{last}, {first}"
+        if last_first not in candidates:
+            candidates.append(last_first)
+        if suffix:
+            suffixed = f"{last} {suffix}, {first}"
+            if suffixed not in candidates:
+                candidates.append(suffixed)
+
+    return candidates
+
 
 def _find_player_row(df, player: str):
     """Best-effort, never-raises row lookup by full name across whichever
@@ -54,21 +123,16 @@ def _find_player_row(df, player: str):
     """
     try:
         logger.debug("Matching %r against columns: %s", player, list(df.columns))
-        target = player.strip().lower()
-        last_first = None
-        parts = target.rsplit(" ", 1)
-        if len(parts) == 2:
-            last_first = f"{parts[1]}, {parts[0]}"  # "Last, First" ordering, lowercased
+        candidates = _name_lookup_candidates(player)
 
         for col in _NAME_COLUMN_CANDIDATES:
             if col not in df.columns:
                 continue
-            values = df[col].astype(str).str.lower()
-            match = df[values == target]
-            if match.empty and last_first:
-                match = df[values == last_first]
-            if not match.empty:
-                return match
+            values = df[col].astype(str).map(_normalize_for_match)
+            for candidate in candidates:
+                match = df[values == candidate]
+                if not match.empty:
+                    return match
         logger.warning(
             "No recognized player-name column for %r among %s - skipping this row", player, list(df.columns)
         )
