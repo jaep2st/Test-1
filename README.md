@@ -46,6 +46,8 @@ Real mode needs several free-but-separate data sources wired together:
 | Recent form (last 7/15/30 days) | Baseball Savant pitch logs, via `pybaseball` | No |
 | Ballpark factors + live wind/temperature | Static table + Open-Meteo | No |
 | Cross-book player-prop odds | The Odds API (free tier, self-serve key) | Yes (props run model-only without it) |
+| Real per-hitter park + weather factor (optional upgrade) | Ballpark Pal API | Optional - falls back to the static table + Open-Meteo above without it |
+| "BP Model" cross-check column, HR/Hits (optional) | Ballpark Pal API, `/api/v1/matchups` | Optional - Ballpark Pal's own independent model shown alongside ours, not blended into it. Their real numbers are per-plate-appearance; converted to per-game via P(at least 1 in ~4.3 PA) - see `mlb_props/ballparkpal.py` |
 
 ```bash
 pip install pybaseball pandas   # only needed for real (non --mock) Statcast/matchup/form data
@@ -103,7 +105,10 @@ One-time setup:
    secret** -> name it `ODDS_API_KEY` -> paste your free key from
    https://the-odds-api.com. (Skip this to publish a model-only report with
    no odds/EV columns. A `BETSTAMP_API_KEY` secret works too, as an
-   alternative.)
+   alternative.) Optionally, also add a `BALLPARKPAL_API_KEY` secret (from
+   ballparkpal.com's own API Access page) to upgrade park/weather scoring
+   with real per-hitter modeled factors - the report runs the same without
+   it, just with the built-in static table + Open-Meteo estimate instead.
 2. **Settings -> Pages -> Build and deployment -> Source: "GitHub
    Actions"**.
 3. **Actions tab -> "MLB props report" -> Run workflow** to publish the
@@ -123,11 +128,12 @@ maps that score onto a heuristic model probability calibrated to realistic
 MLB base rates (~10% average HR-per-game, ~42% average 2+ total-bases game,
 ~66% average 1+ hit game). That's **not** a trained/calibrated model - it's a
 directional estimate you cross-check against the market. The 1+ hits score
-has a known blind spot worth knowing before trusting it: it has no batter or
-pitcher strikeout-rate data to draw on (see `compute_hits_score`'s docstring),
-so a high-power, high-strikeout slugger can score better than a genuinely
-better "gets a hit" bet this model can't tell apart from an average one on
-that axis. Two independent signals drive the ranking:
+uses real per-batter and per-pitcher strikeout rate (`batter_k_pct` /
+`pitcher_k_pct_allowed` in `HITS_WEIGHTS` - see `compute_hits_score`'s
+docstring), derived from the same pitch-level Statcast log already fetched
+for `hr_fb_pct`/pitch-mix, at no extra network cost; it's a season-long rate,
+not a whiff rate specific to that night's exact pitch-mix matchup, but it's a
+real number, not a blind spot. Two independent signals drive the ranking:
 
 1. **Model edge**: does our score say this player's probability is higher
    than what the best available price actually pays for?
@@ -138,6 +144,24 @@ that axis. Two independent signals drive the ranking:
 A prop flagged by both is the strongest kind of spot. Every row in the
 report shows both EV%s plus the number of books used for the consensus, so
 you can judge how much to trust the edge yourself.
+
+### Data quality notes (permanent, applies to every run)
+
+These two are printed at the bottom of every generated report (text and
+HTML) as well, so they travel with the output itself, not just this doc:
+
+- **"EV%" means model vs. market, not "the market is wrong."** Every EV%
+  figure is our model's probability compared against the book's own no-vig
+  fair price. A positive EV% means our model disagrees with the market in
+  the bettor's favor - it is not proof the market is mispriced. The market
+  could just as easily be right and the model wrong. Treat it as one
+  informed opinion set against another, not a guaranteed edge.
+- **Pull-air% is permanently unavailable for the HR score (6% of its
+  weight).** Neither Baseball Savant leaderboard this project pulls carries
+  a pull-rate column, and FanGraphs (which does) returns 403 to every
+  request from this environment's hosting provider (GitHub Actions). That
+  component defaults to 0 for every player, every run - a disclosed gap,
+  not a hidden zero.
 
 ### MLB props CLI options
 
@@ -152,6 +176,7 @@ you can judge how much to trust the edge yourself.
 | `--top` | `15` | Max rows per section |
 | `--odds-api-key` | `$ODDS_API_KEY` | The Odds API key, checked first (omit both this and `--api-key` for a model-only report, no odds) |
 | `--api-key` | `$BETSTAMP_API_KEY` | Betstamp API key, used if no Odds API key is set |
+| `--ballparkpal-api-key` | `$BALLPARKPAL_API_KEY` | Optional Ballpark Pal API key - real per-hitter park+weather factor upgrade (see `mlb_props/ballparkpal.py`); scoring is unchanged without it |
 | `--books` | all | Restrict to specific sportsbook IDs (repeatable) |
 | `--out` | none | Also write the console-text report to this file |
 | `--html-out` | none | Also write the styled HTML report to this file |

@@ -74,6 +74,12 @@ class EdgeCandidate:
     temp_f: Optional[float]
     is_dome: bool
     weather_boost_pct: float
+    # Ballpark Pal's own independent per-game model probability, when
+    # configured (see mlb_props/ballparkpal.py) - None for TB (no honest
+    # analog exists for that market) and for HR/Hits when not configured
+    # or Ballpark Pal has no data for this matchup. A genuine second
+    # opinion, never blended into model_prob/ev_percent_model themselves.
+    bp_model_prob: Optional[float] = None
 
     @property
     def has_market_data(self) -> bool:
@@ -186,6 +192,7 @@ def _build_edges(
                     temp_f=result.temp_f,
                     is_dome=result.is_dome,
                     weather_boost_pct=result.weather_boost_pct,
+                    bp_model_prob=result.bp_model_prob,
                 )
             )
             continue
@@ -209,6 +216,7 @@ def _build_edges(
                 temp_f=result.temp_f,
                 is_dome=result.is_dome,
                 weather_boost_pct=result.weather_boost_pct,
+                bp_model_prob=result.bp_model_prob,
             )
         )
     return candidates

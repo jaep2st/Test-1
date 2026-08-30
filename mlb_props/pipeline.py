@@ -5,7 +5,7 @@ park-weather data -> composite scores -> odds -> ranked +EV report.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Dict, List, Optional
 
@@ -13,6 +13,7 @@ from odds_monitor.ev import find_fair_prices
 from odds_monitor.models import PropLine
 from odds_monitor.providers.base import OddsProvider
 
+from .ballparkpal import BallparkPalProvider, NoBallparkPalProvider
 from .context import ParkWeatherProvider
 from .edges import EdgeCandidate, build_hits_edges, build_hr_edges, build_total_bases_edges, rank_candidates
 from .hot_streak import HeatIndex, HotStreakProvider
@@ -277,7 +278,9 @@ def run_pipeline(
     extra_batters: Optional[List[str]] = None,
     min_ev_percent: float = 0.0,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
+    ballparkpal: Optional[BallparkPalProvider] = None,
 ) -> SlateReport:
+    ballparkpal = ballparkpal or NoBallparkPalProvider()
     slate = schedule.get_slate(game_date)
     if not slate:
         logger.warning("No games found on the slate for %s", game_date)
@@ -339,6 +342,23 @@ def run_pipeline(
         # candidates, not the full roster) - see StatcastProvider.
         # enrich_batted_ball's docstring for why it isn't in phase 1.
         batter = statcast.enrich_batted_ball(batter)
+
+        # Real, per-hitter park+weather factor from Ballpark Pal, when
+        # configured, replaces this project's own static-table + rough
+        # Open-Meteo wind/temp estimate for this specific batter - a
+        # domain-specific model beats a game-level heuristic shared across
+        # every batter in the park. `None` (no key configured, or Ballpark
+        # Pal has no projection for this player/game yet) leaves park_ctx
+        # untouched, same missing-signal-falls-back-to-existing-behavior
+        # posture as every other optional data source in this project.
+        bp_factor = ballparkpal.get_hitter_park_factor(batter_name, game_date)
+        if bp_factor is not None and bp_factor.home_runs is not None:
+            park_ctx = replace(
+                park_ctx,
+                park_hr_factor=round(bp_factor.home_runs * 100, 1),
+                weather_hr_boost_pct=round((bp_factor.home_runs_weather or 0.0) * 100, 1),
+            )
+
         heat = hot_streak.get_heat_index(batter_name, as_of=game_date)
         heat_indices.append(heat)
         matchup = matchup_provider.get_matchup(
@@ -348,6 +368,19 @@ def run_pipeline(
         hr_result = compute_hr_score(batter, pitcher, matchup, park_ctx, heat)
         tb_result = compute_total_bases_score(batter, pitcher, matchup, park_ctx, heat)
         hits_result = compute_hits_score(batter, pitcher, matchup, park_ctx, heat)
+
+        # Ballpark Pal's own independent HR/Hits model for this exact
+        # matchup, when configured - a genuine second opinion surfaced
+        # alongside our own model_prob, never blended into it. See
+        # ballparkpal.py's MatchupProbability docstring for why no
+        # total-bases figure exists to attach to tb_result.
+        bp_matchup = ballparkpal.get_matchup_probability(batter_name, pitcher.player, game_date)
+        if bp_matchup is not None:
+            if bp_matchup.home_run_model_prob is not None:
+                hr_result = replace(hr_result, bp_model_prob=bp_matchup.home_run_model_prob)
+            if bp_matchup.hits_model_prob is not None:
+                hits_result = replace(hits_result, bp_model_prob=bp_matchup.hits_model_prob)
+
         hr_scores.append(hr_result)
         tb_scores.append(tb_result)
         hits_scores.append(hits_result)

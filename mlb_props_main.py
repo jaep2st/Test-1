@@ -48,15 +48,23 @@ from odds_monitor.providers.betstamp import BetstampProvider
 from odds_monitor.providers.fallback import FallbackOddsProvider
 from odds_monitor.providers.theoddsapi import TheOddsApiProvider
 
+from mlb_props.ballparkpal import (
+    BALLPARKPAL_API_BASE,
+    BallparkPalProvider,
+    LiveBallparkPalProvider,
+    MockBallparkPalProvider,
+    NoBallparkPalProvider,
+)
 from mlb_props.context import LiveParkWeatherProvider, MockParkWeatherProvider, ParkWeatherProvider
 from mlb_props.hot_streak import HotStreakProvider, MockHotStreakProvider, StatcastHotStreakProvider
 from mlb_props.market import MockMlbPropsOddsProvider, NoOddsProvider
 from mlb_props.matchup import MatchupProvider, MockMatchupProvider, PybaseballMatchupProvider
 from mlb_props.html_report import render_html_report
 from mlb_props.pipeline import run_pipeline
+from mlb_props.pdf_report import render_pdf_report
 from mlb_props.report import render_report
 from mlb_props.schedule import MLB_STATS_API_BASE, MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
-from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider
+from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider, _find_player_row
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +109,8 @@ def build_providers(args: argparse.Namespace):
         odds: OddsProvider = MockMlbPropsOddsProvider(
             batters=all_batters, events_by_batter=events_by_batter, seed=args.mock_seed
         )
-        return schedule, statcast, matchup, hot_streak, park_weather, odds
+        ballparkpal: BallparkPalProvider = MockBallparkPalProvider(seed=args.mock_seed)
+        return schedule, statcast, matchup, hot_streak, park_weather, odds, ballparkpal
 
     year = args.year or args.game_date.year
     schedule = MlbStatsApiScheduleProvider()
@@ -144,7 +153,17 @@ def build_providers(args: argparse.Namespace):
             "only, with no market price or EV%%, until a key is set."
         )
         odds = NoOddsProvider()
-    return schedule, statcast, matchup, hot_streak, park_weather, odds
+
+    ballparkpal_key = args.ballparkpal_api_key or os.environ.get("BALLPARKPAL_API_KEY")
+    if ballparkpal_key:
+        ballparkpal = LiveBallparkPalProvider(api_key=ballparkpal_key)
+    else:
+        # Optional enhancement, not a required data source (unlike odds):
+        # degrades to this project's own existing static park-factor table
+        # + Open-Meteo estimate, unchanged - no warning needed, since most
+        # runs simply won't have this key configured.
+        ballparkpal = NoBallparkPalProvider()
+    return schedule, statcast, matchup, hot_streak, park_weather, odds, ballparkpal
 
 
 def run_live_odds_scan(odds_api_key: str, books: Optional[List[str]]) -> str:
@@ -203,6 +222,125 @@ def run_live_odds_scan(odds_api_key: str, books: Optional[List[str]]) -> str:
             line = group[0]
             out.append(f"  - {line.player} ({line.event}) {line.market} {line.side} {line.line:g}: {line.sportsbook}={line.odds:+d}")
 
+    return "\n".join(out)
+
+
+def run_ballparkpal_matchups_check(game_date: date, api_key: str) -> str:
+    """Standalone diagnostic for `--ballparkpal-matchups-check`: resolves a
+    real, unstated question about Ballpark Pal's `/api/v1/matchups`
+    endpoint - are `homeRunProbability`/`strikeoutProbability`/etc. per-
+    plate-appearance or per-game? Not stated anywhere in Ballpark Pal's own
+    API docs (read manually - see mlb_props/ballparkpal.py's module
+    docstring for why), and that integration deliberately doesn't use this
+    endpoint yet because guessing wrong here would silently make two
+    models that actually agree look like they wildly disagree.
+
+    `strikeoutProbability` is the cleanest real-world yardstick available:
+    MLB's actual league-average strikeout rate is famously ~22% per plate
+    appearance vs. ~60-65% per game (P(at least one K) across a real
+    ~4 PA/game). Whichever range the real numbers cluster around settles
+    the question decisively - no guessing required.
+    """
+    import statistics
+
+    session = build_retrying_session()
+    resp = session.get(
+        f"{BALLPARKPAL_API_BASE}/matchups",
+        params={"date": game_date.isoformat(), "parkAdjusted": "true"},
+        headers={"X-API-Key": api_key},
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    rows = payload.get("data", payload)
+    if isinstance(rows, dict):
+        rows = rows.get("items", rows.get("hitters", rows.get("rows", rows.get("data", []))))
+
+    out: List[str] = [f"BALLPARK PAL MATCHUPS CHECK (probability basis) - {game_date.isoformat()}", ""]
+    if not isinstance(rows, list) or not rows:
+        out.append(f"No usable rows (raw payload sample): {str(payload)[:1500]}")
+        return "\n".join(out)
+
+    out.append(f"{len(rows)} real batter-vs-starter matchup rows returned.")
+    out.append("")
+    for field in ("homeRunProbability", "strikeoutProbability", "walkProbability", "singleProbability"):
+        values = [row[field] for row in rows if row.get(field) is not None]
+        if not values:
+            out.append(f"{field}: no non-null values in this response")
+            continue
+        out.append(
+            f"{field}: n={len(values)} min={min(values):.1f} max={max(values):.1f} "
+            f"mean={statistics.mean(values):.1f} median={statistics.median(values):.1f}"
+        )
+    out.append("")
+    out.append(
+        "Read: strikeoutProbability mean near ~20-25% => per-plate-appearance basis "
+        "(matches real MLB's ~22% league-average K rate per PA). Mean near ~55-70% => "
+        "per-game basis (matches P(at least one K) across a real ~4 PA/game)."
+    )
+    out.append("")
+    out.append("Sample rows, highest homeRunProbability first:")
+    for row in sorted(rows, key=lambda r: r.get("homeRunProbability") or -1, reverse=True)[:8]:
+        out.append(
+            f"  - {row.get('batterName')} vs {row.get('pitcherName')}: HR={row.get('homeRunProbability')} "
+            f"K={row.get('strikeoutProbability')} BB={row.get('walkProbability')} 1B={row.get('singleProbability')}"
+        )
+    return "\n".join(out)
+
+
+def run_name_lookup_check(names: List[str], year: int) -> str:
+    """Standalone diagnostic for `--name-lookup-check`: looks up each given
+    player name directly against the real, live Baseball Savant leaderboard
+    `_find_player_row()` actually uses - isolated from the rest of the
+    pipeline (real schedule fetch, real posted lineups, real odds), so a
+    batter who's silently absent from a full run's candidate pool can be
+    checked on their own: does the Savant lookup itself succeed or fail for
+    this exact name, right now?
+
+    Exists because a full run's own GitHub Actions log is too large to
+    inspect after the fact for one specific player's lookup outcome (a
+    log-reading tool that caps at roughly the last ~2000 lines of a real
+    run only ever sees the final report, never the early "Skipping X - no
+    Statcast batter profile available" warnings from earlier in that same
+    run) - this gives a direct, small, targeted answer instead of trying to
+    infer one from a full run's tail.
+    """
+    provider = PybaseballStatcastProvider(year=year)
+    pyb = provider._pyb()
+    barrels = pyb.statcast_batter_exitvelo_barrels(year, minBBE=provider.min_bbe)
+    expected = pyb.statcast_batter_expected_stats(year, minPA=provider.min_bbe)
+
+    out: List[str] = [f"NAME LOOKUP CHECK (Baseball Savant, real leaderboard) - {year}", ""]
+    out.append(
+        f"{len(barrels)} real batters in the exitvelo/barrels leaderboard (min {provider.min_bbe} BBE), "
+        f"{len(expected)} in the expected-stats leaderboard (min {provider.min_bbe} PA)."
+    )
+    out.append("")
+
+    name_col = next((c for c in ("player_name", "last_name, first_name", "Name", "name") if c in barrels.columns), None)
+
+    for name in names:
+        match = _find_player_row(barrels, name)
+        exp_match = _find_player_row(expected, name)
+        if not match.empty:
+            real_name = match.iloc[0][name_col] if name_col else "?"
+            out.append(
+                f"MATCH: {name!r} -> barrels row found (Savant name: {real_name!r}); "
+                f"expected-stats row {'found' if not exp_match.empty else 'MISSING'}"
+            )
+        else:
+            out.append(f"NO MATCH: {name!r} not found in barrels leaderboard (min_bbe={provider.min_bbe}).")
+            if name_col:
+                last = name.strip().split()[-1].lower()
+                close = barrels[barrels[name_col].astype(str).str.lower().str.contains(last, na=False, regex=False)]
+                if not close.empty:
+                    out.append(f"  Rows containing {last!r}: {list(close[name_col].head(5))}")
+                else:
+                    out.append(
+                        f"  No row even contains {last!r} - this player likely doesn't clear "
+                        f"min_bbe={provider.min_bbe} yet this season, or isn't on this leaderboard at all "
+                        "(real absence, not a name-matching bug)."
+                    )
     return "\n".join(out)
 
 
@@ -283,9 +421,22 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--api-key", default=None, help="Betstamp API key (or set BETSTAMP_API_KEY), used if no Odds API key is configured. Not needed with --mock.")
     parser.add_argument("--books", action="append", default=None, help="Restrict to specific sportsbook IDs (repeatable).")
+    parser.add_argument(
+        "--ballparkpal-api-key",
+        default=None,
+        help="Ballpark Pal API key (or set BALLPARKPAL_API_KEY) - optional real per-hitter park+weather "
+        "factor upgrade over the built-in static table/Open-Meteo estimate. Not needed with --mock; "
+        "without it, scoring falls back to the existing behavior unchanged.",
+    )
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Logging verbosity.")
     parser.add_argument("--out", default=None, help="Write the console-text report to this file instead of (or in addition to) stdout.")
     parser.add_argument("--html-out", default=None, help="Also write a self-contained styled HTML report to this file (see mlb_props/html_report.py).")
+    parser.add_argument(
+        "--pdf-out",
+        default=None,
+        help="Also write a print-ready PDF report to this file, including real per-game clearance rates "
+        "(see mlb_props/pdf_report.py). Requires `pip install reportlab`.",
+    )
     parser.add_argument(
         "--live-odds-scan",
         action="store_true",
@@ -301,6 +452,24 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "MLB Stats API - useful for cross-checking whether a game the odds pipeline treated as pregame has "
         "actually already started (see theoddsapi.py's commence_time-based filter, which relies on a "
         "third-party copy of this same information and has been confirmed wrong for at least one real game).",
+    )
+    parser.add_argument(
+        "--ballparkpal-matchups-check",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead fetch Ballpark Pal's "
+        "/api/v1/matchups for --date and print summary statistics (min/max/mean) for its probability "
+        "fields - resolves whether they're per-plate-appearance or per-game (undocumented) by comparing "
+        "strikeoutProbability against real MLB base rates. Requires --ballparkpal-api-key/BALLPARKPAL_API_KEY. "
+        "Diagnostic only - see mlb_props/ballparkpal.py for why this endpoint isn't used in scoring yet.",
+    )
+    parser.add_argument(
+        "--name-lookup-check",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead look up each --batters name directly "
+        "against the real, live Baseball Savant leaderboard - isolated from the rest of the pipeline (real "
+        "schedule/lineups/odds), so a player silently missing from a full run's candidate pool can be checked "
+        "on their own: does the Savant name lookup succeed or fail for this exact name, right now? Requires "
+        "--batters (repeatable) and --year.",
     )
     return parser.parse_args(argv)
 
@@ -318,6 +487,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             logger.info("Wrote game status check to %s", args.out)
         return 0
 
+    if args.name_lookup_check:
+        if not args.batters:
+            print("Configuration error: --name-lookup-check requires --batters (repeatable).", file=sys.stderr)
+            return 2
+        text = run_name_lookup_check(args.batters, args.year or args.game_date.year)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote name lookup check to %s", args.out)
+        return 0
+
+    if args.ballparkpal_matchups_check:
+        ballparkpal_key = args.ballparkpal_api_key or os.environ.get("BALLPARKPAL_API_KEY")
+        if not ballparkpal_key:
+            print(
+                "Configuration error: --ballparkpal-matchups-check requires --ballparkpal-api-key or "
+                "BALLPARKPAL_API_KEY.",
+                file=sys.stderr,
+            )
+            return 2
+        text = run_ballparkpal_matchups_check(args.game_date, ballparkpal_key)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote Ballpark Pal matchups check to %s", args.out)
+        return 0
+
     if args.live_odds_scan:
         odds_api_key = args.odds_api_key or os.environ.get("ODDS_API_KEY")
         if not odds_api_key:
@@ -332,7 +530,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     try:
-        schedule, statcast, matchup, hot_streak, park_weather, odds = build_providers(args)
+        schedule, statcast, matchup, hot_streak, park_weather, odds, ballparkpal = build_providers(args)
     except ValueError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
@@ -348,6 +546,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         extra_batters=args.batters,
         min_ev_percent=args.min_ev,
         max_candidates=args.max_candidates,
+        ballparkpal=ballparkpal,
     )
     text = render_report(report, top=args.top)
 
@@ -361,6 +560,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         with open(args.html_out, "w") as f:
             f.write(html_text)
         logger.info("Wrote HTML report to %s", args.html_out)
+    if args.pdf_out:
+        try:
+            render_pdf_report(report, args.pdf_out, top=args.top, is_mock=args.mock)
+        except RuntimeError as exc:
+            # Missing reportlab shouldn't fail an otherwise-successful run -
+            # same "optional data source, graceful fallback" posture as
+            # every other optional integration in this project (Ballpark
+            # Pal, live odds). The text/HTML reports above already wrote
+            # successfully by this point.
+            logger.warning("Skipped PDF report: %s", exc)
+        else:
+            logger.info("Wrote PDF report to %s", args.pdf_out)
     return 0
 
 

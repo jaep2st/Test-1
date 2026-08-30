@@ -23,6 +23,7 @@ def _elite_batter():
         iso=0.300,
         xwoba=0.420,
         xslg=0.630,
+        k_pct=14.0,
     )
 
 
@@ -44,6 +45,7 @@ def _weak_batter():
         iso=0.110,
         xwoba=0.300,
         xslg=0.370,
+        k_pct=29.0,
     )
 
 
@@ -61,6 +63,7 @@ def _bad_pitcher():
         xwoba_allowed=0.355,
         xslg_allowed=0.460,
         pitch_mix={"FF": 0.5, "SL": 0.3, "CH": 0.2},
+        k_pct_allowed=16.0,
     )
 
 
@@ -78,6 +81,7 @@ def _good_pitcher():
         xwoba_allowed=0.285,
         xslg_allowed=0.365,
         pitch_mix={"FF": 0.4, "SL": 0.35, "CU": 0.25},
+        k_pct_allowed=27.0,
     )
 
 
@@ -190,3 +194,86 @@ def test_hits_score_does_not_use_park_or_weather_as_scoring_inputs():
     result_a = compute_hits_score(_elite_batter(), _bad_pitcher(), matchup, park_a, heat)
     result_b = compute_hits_score(_elite_batter(), _bad_pitcher(), matchup, park_b, heat)
     assert result_a.score == result_b.score
+
+
+def test_hits_score_rewards_a_lower_batter_strikeout_rate_holding_everything_else_equal():
+    # Isolates batter_k_pct: two otherwise-identical batters, only k_pct
+    # differs. The low-strikeout one must score higher - this is the real
+    # signal that used to be a documented blind spot (see scoring.py's
+    # HITS_WEIGHTS note).
+    from dataclasses import replace
+
+    park = MockParkWeatherProvider(seed=9).get_context("Fenway Park")
+    heat = MockHotStreakProvider(seed=9).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=9).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+
+    contact_hitter = _elite_batter()
+    whiff_prone = replace(contact_hitter, k_pct=32.0)
+    assert contact_hitter.k_pct < whiff_prone.k_pct
+
+    good = compute_hits_score(contact_hitter, _bad_pitcher(), matchup, park, heat)
+    bad = compute_hits_score(whiff_prone, _bad_pitcher(), matchup, park, heat)
+
+    assert good.score > bad.score
+    assert good.components["batter_k_pct"] > bad.components["batter_k_pct"]
+
+
+def test_hits_score_rewards_facing_a_lower_strikeout_pitcher_holding_everything_else_equal():
+    # Isolates pitcher_k_pct_allowed the same way.
+    from dataclasses import replace
+
+    park = MockParkWeatherProvider(seed=10).get_context("Fenway Park")
+    heat = MockHotStreakProvider(seed=10).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=10).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+
+    weak_k_pitcher = _bad_pitcher()
+    strikeout_pitcher = replace(weak_k_pitcher, k_pct_allowed=30.0)
+    assert weak_k_pitcher.k_pct_allowed < strikeout_pitcher.k_pct_allowed
+
+    good = compute_hits_score(_elite_batter(), weak_k_pitcher, matchup, park, heat)
+    bad = compute_hits_score(_elite_batter(), strikeout_pitcher, matchup, park, heat)
+
+    assert good.score > bad.score
+    assert good.components["pitcher_k_pct_allowed"] > bad.components["pitcher_k_pct_allowed"]
+
+
+def test_unenriched_k_pct_scores_as_neutral_not_as_a_maximum():
+    # Regression test for a real bug caught against live data 2026-08-29:
+    # BatterProfile.k_pct/PitcherProfile.k_pct_allowed default to None when
+    # enrichment hasn't run or failed to resolve a real value (confirmed
+    # live: happens for real players, not just in theory). A plain float
+    # 0.0 default used to feed straight into the inverted normalize below
+    # and come out as 100.0 - the *maximum* possible contact score - for
+    # data we simply don't have. It must come out as a neutral 50.0 instead.
+    from dataclasses import replace
+
+    park = MockParkWeatherProvider(seed=11).get_context("Fenway Park")
+    heat = MockHotStreakProvider(seed=11).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=11).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+
+    unenriched_batter = replace(_elite_batter(), k_pct=None)
+    unenriched_pitcher = replace(_bad_pitcher(), k_pct_allowed=None)
+    assert unenriched_batter.k_pct is None
+    assert unenriched_pitcher.k_pct_allowed is None
+
+    result = compute_hits_score(unenriched_batter, unenriched_pitcher, matchup, park, heat)
+
+    assert result.components["batter_k_pct"] == 50.0
+    assert result.components["pitcher_k_pct_allowed"] == 50.0
+
+
+def test_batter_profile_and_pitcher_profile_default_k_pct_to_none_not_zero():
+    # The dataclass defaults themselves must stay None, not 0.0 - see the
+    # regression test above for why 0.0 is actively dangerous here, not
+    # just imprecise.
+    from dataclasses import replace
+
+    from mlb_props.statcast import BatterProfile, PitcherProfile
+
+    batter = _elite_batter()
+    default_batter = replace(batter, k_pct=BatterProfile.__dataclass_fields__["k_pct"].default)
+    assert default_batter.k_pct is None
+
+    pitcher = _bad_pitcher()
+    default_pitcher = replace(pitcher, k_pct_allowed=PitcherProfile.__dataclass_fields__["k_pct_allowed"].default)
+    assert default_pitcher.k_pct_allowed is None

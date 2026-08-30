@@ -74,6 +74,11 @@ class HRScoreResult:
     temp_f: Optional[float]
     is_dome: bool
     weather_boost_pct: float  # heuristic % shift to HR odds from wind + temp
+    # Ballpark Pal's own independent per-game HR model, when configured -
+    # see mlb_props/ballparkpal.py. `None` when not configured or Ballpark
+    # Pal has no data for this matchup; never blended into `model_prob`
+    # itself, only shown alongside it as a genuine second opinion.
+    bp_model_prob: Optional[float] = None
 
 
 def compute_hr_score(
@@ -152,6 +157,13 @@ class TotalBasesScoreResult:
     temp_f: Optional[float]
     is_dome: bool
     weather_boost_pct: float
+    # No Ballpark Pal cross-check for this market: "2+ total bases" can be
+    # satisfied across multiple plate appearances (e.g. two singles), which
+    # their per-PA outcome breakdown can't represent - see
+    # mlb_props/ballparkpal.py's MatchupProbability docstring. Always None;
+    # kept only so EdgeCandidate's generic wiring doesn't need a special
+    # case for this market.
+    bp_model_prob: Optional[float] = None
 
 
 def compute_total_bases_score(
@@ -198,32 +210,40 @@ def compute_total_bases_score(
 # 1+ hits score
 # ---------------------------------------------------------------------------
 
-# NOTE ON A REAL DATA GAP: getting at least one hit is, in real scouting
-# terms, driven heavily by a batter's strikeout/contact rate (fewer strikeouts
-# = more balls in play = more chances for a hit) and by the pitcher's own
-# strikeout rate. Neither is available from the Statcast leaderboards this
-# project pulls (see statcast.py's module docstring - `BatterProfile`/
-# `PitcherProfile` carry batted-ball *quality* once contact is made, not
-# swing-and-miss/strikeout tendency at all). That's a real, acknowledged
-# blind spot: a high-power, high-strikeout slugger with elite exit velocity
-# will score well here despite being a genuinely worse "gets a hit" bet than
-# a high-contact, lower-power hitter this model can't distinguish from a
-# below-average one on that axis. Weighted to lean on `xwoba` (a contact+
-# power blend less skewed toward pure power than `iso`/barrel%) as the
-# primary signal for that reason, with hot-streak form given a bigger role
-# than in the HR/TB scores to partially compensate. Park/weather are
-# deliberately excluded entirely - both this project's park factor and
-# weather-boost inputs are specifically HR-oriented (see context.py) and
-# have no real relationship to a batter simply making contact for a hit.
+# FORMER DATA GAP, NOW FIXED (2026-08-30): getting at least one hit is, in
+# real scouting terms, driven heavily by a batter's strikeout/contact rate
+# (fewer strikeouts = more balls in play = more chances for a hit) and by
+# the pitcher's own strikeout rate. Neither is on the Statcast *leaderboard*
+# endpoints this project pulls for the rest of `BatterProfile`/
+# `PitcherProfile` (batted-ball *quality* once contact is made, not
+# swing-and-miss tendency). Both are now real numbers anyway -
+# `BatterProfile.k_pct` and `PitcherProfile.k_pct_allowed` - computed from
+# the same per-player pitch-level Statcast logs already fetched for
+# `hr_fb_pct`/pitch-mix (see `enrich_batted_ball()` and `_pitcher_arsenal()`
+# in statcast.py), at no extra network cost. `batter_k_pct` and
+# `pitcher_k_pct_allowed` below score contact ability directly instead of
+# leaving it as a blind spot: a high-power, high-strikeout slugger with
+# elite exit velocity no longer scores as well here as a high-contact,
+# lower-power hitter with the same underlying quality of contact once it's
+# put in play. Weighted to lean on `xwoba` (a contact+power blend less
+# skewed toward pure power than `iso`/barrel%) as the primary signal, with
+# hot-streak form given a bigger role than in the HR/TB scores to partially
+# compensate for what's still a season-long rate, not a whiff rate specific
+# to tonight's actual pitch-mix matchup. Park/weather are deliberately
+# excluded entirely - both this project's park factor and weather-boost
+# inputs are specifically HR-oriented (see context.py) and have no real
+# relationship to a batter simply making contact for a hit.
 HITS_WEIGHTS: Dict[str, float] = {
-    "xwoba": 0.22,
-    "hard_hit_pct": 0.14,
-    "sweet_spot_pct": 0.10,
-    "barrel_pct": 0.08,
-    "avg_exit_velo": 0.06,
-    "platoon_edge": 0.14,
-    "pitcher_allowed": 0.18,
-    "hot_streak": 0.08,
+    "xwoba": 0.16,
+    "hard_hit_pct": 0.10,
+    "sweet_spot_pct": 0.08,
+    "barrel_pct": 0.06,
+    "avg_exit_velo": 0.04,
+    "platoon_edge": 0.12,
+    "pitcher_allowed": 0.14,
+    "hot_streak": 0.06,
+    "batter_k_pct": 0.16,
+    "pitcher_k_pct_allowed": 0.08,
 }
 assert abs(sum(HITS_WEIGHTS.values()) - 1.0) < 1e-9
 
@@ -242,6 +262,9 @@ class HitsScoreResult:
     temp_f: Optional[float]
     is_dome: bool
     weather_boost_pct: float
+    # Ballpark Pal's own independent per-game Hits model, when configured -
+    # see mlb_props/ballparkpal.py. Same posture as HRScoreResult.bp_model_prob.
+    bp_model_prob: Optional[float] = None
 
 
 def compute_hits_score(
@@ -263,6 +286,26 @@ def compute_hits_score(
             (pitcher.xwoba_allowed / 0.36 + pitcher.hard_hit_pct_allowed / 46.0) / 2.0, 0.55, 1.15
         ),
         "hot_streak": _normalize(heat.z_score, -2.0, 2.0),
+        # Lower K% = more balls in play = more chances for a hit, so this is
+        # inverted (100 - normalize(...)): a low-strikeout batter scores
+        # high here, a high-strikeout one scores low. Same inversion logic
+        # as HR_WEIGHTS' "pitcher_allowed" comment, just on the opposite
+        # side of the plate appearance.
+        #
+        # `None` (not yet enriched, or enrichment couldn't resolve a real
+        # value - see BatterProfile.k_pct's docstring) scores as a plain
+        # neutral 50.0, deliberately NOT run through the inversion below.
+        # Confirmed live 2026-08-29 why that guard is required: this
+        # component used to default a plain float 0.0 (an impossible real
+        # K%) straight into `100.0 - _normalize(0.0, 12.0, 32.0)`, which
+        # clips to 0 and inverts to 100 - the *maximum* possible score,
+        # exactly backwards for data we don't have. Neutral is the correct,
+        # honest stand-in, same convention `_pitcher_arsenal`'s docstring
+        # already promises for any other missing signal.
+        "batter_k_pct": 100.0 - _normalize(batter.k_pct, 12.0, 32.0) if batter.k_pct is not None else 50.0,
+        "pitcher_k_pct_allowed": (
+            100.0 - _normalize(pitcher.k_pct_allowed, 15.0, 32.0) if pitcher.k_pct_allowed is not None else 50.0
+        ),
     }
     score = sum(components[k] * w for k, w in HITS_WEIGHTS.items())
     # Calibration anchors: a real MLB everyday hitter gets 1+ hits in

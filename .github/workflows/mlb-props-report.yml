@@ -12,7 +12,10 @@ name: MLB props report
 #      -> name it ODDS_API_KEY, value = your free API key from
 #      https://the-odds-api.com (no card needed - signup emails you a key
 #      instantly). BETSTAMP_API_KEY also works instead if you have one - see
-#      mlb_props_main.build_providers().
+#      mlb_props_main.build_providers(). Optional: BALLPARKPAL_API_KEY (from
+#      ballparkpal.com's own API Access page) upgrades park/weather scoring
+#      with real per-hitter modeled factors - see mlb_props/ballparkpal.py.
+#      The report runs fine without it; nothing else changes if it's unset.
 #   2. Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
 #   3. Run this workflow once manually (Actions tab -> "MLB props report" ->
 #      "Run workflow") to publish the first version; after that the daily
@@ -49,6 +52,15 @@ on:
         type: boolean
         required: false
         default: false
+      ballparkpal_matchups_check:
+        description: "Also run --ballparkpal-matchups-check (diagnostic: prints summary stats for Ballpark Pal's /api/v1/matchups probability fields to resolve whether they're per-PA or per-game; printed to this job's log, not the published report). Requires BALLPARKPAL_API_KEY."
+        type: boolean
+        required: false
+        default: false
+      name_lookup_check:
+        description: "Space-separated player full names (e.g. 'Gunnar Henderson' 'Pete Alonso' - quote each name) to check directly against the real Baseball Savant leaderboard, isolated from the rest of the pipeline. Leave blank to skip. Printed to this job's log, not the published report."
+        required: false
+        default: ""
   schedule:
     # Twice daily, timed around the US MLB slate (adjust to taste - both
     # are UTC, since GitHub Actions schedule: doesn't support local time):
@@ -84,12 +96,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pybaseball pandas
+          pip install pybaseball pandas reportlab
 
       - name: Generate report from live data
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
+          BALLPARKPAL_API_KEY: ${{ secrets.BALLPARKPAL_API_KEY }}
           BOOKS_INPUT: ${{ inputs.books }}
         run: |
           mkdir -p public
@@ -120,7 +133,20 @@ jobs:
             "${BOOKS_ARGS[@]}" \
             --html-out public/index.html \
             --out public/report.txt \
+            --pdf-out public/Longball_Board.pdf \
             --log-level DEBUG
+
+      - name: Upload the PDF as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: longball-board-pdf
+          # public/report.txt/index.html already prove a run happened even
+          # on a mostly-quiet slate; a missing PDF (e.g. reportlab install
+          # hiccup - see mlb_props_main.py's --pdf-out handling, which never
+          # fails the run for this) shouldn't fail the upload step too.
+          path: public/Longball_Board.pdf
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Scan live-game odds for real cross-book value
         if: ${{ inputs.live_odds_scan }}
@@ -149,6 +175,28 @@ jobs:
           # 2026-08-29 to be wrong for at least one real game) - MLB's own
           # schedule endpoint is the actual source of truth for game state.
           python mlb_props_main.py --game-status-check --date "${{ inputs.date || 'today' }}"
+
+      - name: Check Ballpark Pal matchups probability basis
+        if: ${{ inputs.ballparkpal_matchups_check }}
+        env:
+          BALLPARKPAL_API_KEY: ${{ secrets.BALLPARKPAL_API_KEY }}
+        run: |
+          python mlb_props_main.py --ballparkpal-matchups-check --date "${{ inputs.date || 'today' }}"
+
+      - name: Check specific player names against the real Savant leaderboard
+        if: ${{ inputs.name_lookup_check != '' }}
+        env:
+          NAME_LOOKUP_INPUT: ${{ inputs.name_lookup_check }}
+        run: |
+          # Parsed with Python's shlex (not eval/word-splitting) so a
+          # workflow_dispatch input can't inject shell commands - same
+          # shell-injection-avoidance posture as BOOKS_ARGS above, just
+          # for a free-text field where names can contain spaces.
+          NAMES=()
+          while IFS= read -r name; do
+            NAMES+=(--batters "$name")
+          done < <(python3 -c "import shlex, sys; print(chr(10).join(shlex.split(sys.argv[1])))" "$NAME_LOOKUP_INPUT")
+          python mlb_props_main.py --name-lookup-check "${NAMES[@]}"
 
       - uses: actions/upload-pages-artifact@v3
         with:

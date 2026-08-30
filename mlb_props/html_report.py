@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import html
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .edges import EdgeCandidate
+from .hot_streak import HeatIndex
 from .pipeline import MatchupEnvironment, SlateReport
+from .report import clearance_cols, heat_lookup
 from .scoring import HITS_WEIGHTS, HR_WEIGHTS, TB_WEIGHTS
 
 _STYLE = """
@@ -98,7 +100,7 @@ h1.title{ font-size:clamp(30px,4.6vw,44px); font-weight:800; letter-spacing:.01e
 .heat-bar > i{ position:absolute; top:0; bottom:0; background:var(--accent); border-radius:5px; }
 .hot-row .z{ text-align:right; font-size:13.5px; font-weight:600; }
 .table-scroll{ overflow-x:auto; border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow); background:var(--surface); }
-table.props{ border-collapse:collapse; width:100%; min-width:1080px; font-size:13.5px; }
+table.props{ border-collapse:collapse; width:100%; min-width:1220px; font-size:13.5px; }
 table.props thead th{ position:sticky; top:0; background:var(--surface-2); text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-muted); padding:10px 12px; border-bottom:1px solid var(--border); font-weight:700; white-space:nowrap; }
 table.props tbody td{ padding:10px 12px; border-bottom:1px solid var(--border); white-space:nowrap; }
 table.props tbody tr:last-child td{ border-bottom:none; }
@@ -180,12 +182,21 @@ def _hot_row(rank: int, h) -> str:
       </div>"""
 
 
-def _prop_row(e: EdgeCandidate) -> str:
+def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
+    # bp_model_prob: Ballpark Pal's own independent model, when configured
+    # (see edges.py's EdgeCandidate docstring) - "n/a" for 2+ TB and
+    # whenever it isn't configured or has no data for this matchup.
+    bp_cell = f'<td class="num">{_fmt_opt_pct(e.bp_model_prob)}</td>'
+    # clearance_cols (from report.py, shared with the console report so the
+    # two never drift): (L15 literal count, season rate) - see its
+    # docstring for why L5/L10 aren't shown here either.
+    l15, szn = clearance_cols(heat, kind)
+    clr_cells = f'<td class="num">{_esc(l15)}</td><td class="num">{_esc(szn)}</td>'
     if not e.has_market_data:
         return f"""
           <tr><td class="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div></td>
-            <td class="event">{_esc(e.event)}</td><td class="num">{_fmt_pct(e.model_prob)}</td>
-            <td colspan="7" class="wx-cell">no book currently quotes this prop</td></tr>"""
+            <td class="event">{_esc(e.event)}</td><td class="num">{_fmt_pct(e.model_prob)}</td>{bp_cell}
+            <td colspan="6" class="wx-cell">no book currently quotes this prop</td>{clr_cells}</tr>"""
     both_agree = e.ev_percent_model is not None and e.ev_percent_model > 0 and e.edge_vs_market is not None and e.edge_vs_market > 0
     if both_agree:
         tier = '<div class="tier agree">Model + market agree</div>'
@@ -205,6 +216,7 @@ def _prop_row(e: EdgeCandidate) -> str:
             <td class="player">{_esc(e.player)}{tier}</td>
             <td class="event">{_esc(e.event)}</td>
             <td class="num">{_fmt_pct(e.model_prob)}</td>
+            {bp_cell}
             <td class="num pos">{e.best_line.odds:+d}</td>
             <td class="book">{_esc(e.best_line.sportsbook)}</td>
             <td class="num">{_fmt_opt_pct(e.market_fair_prob)}</td>
@@ -213,6 +225,7 @@ def _prop_row(e: EdgeCandidate) -> str:
             <td class="num {'pos' if e.ev_percent_market is not None and e.ev_percent_market >= 0 else 'neg' if e.ev_percent_market is not None else ''}">{ev_market_cell}</td>
             <td class="num">{e.books_quoting}</td>
             <td class="wx-cell">{wind}, {temp} <b>{e.weather_boost_pct:+.1f}%</b></td>
+            {clr_cells}
           </tr>"""
 
 
@@ -228,19 +241,21 @@ def _weight_rows(weights: dict) -> str:
     return "\n".join(rows)
 
 
-def _prop_table(title: str, hint: str, edges: List[EdgeCandidate], prob_header: str, top: int) -> str:
+def _prop_table(title: str, hint: str, edges: List[EdgeCandidate], prob_header: str, top: int, heat_by_player: Dict[str, HeatIndex], kind: str) -> str:
     if not edges:
         return f"""
     <div class="section-head"><h2>{_esc(title)}</h2><span class="hint">{_esc(hint)}</span></div>
     <div class="empty">No candidates scored for this slate.</div>"""
-    rows = "".join(_prop_row(e) for e in edges[:top])
+    rows = "".join(_prop_row(e, heat_by_player.get(e.player), kind) for e in edges[:top])
     return f"""
     <div class="section-head"><h2>{_esc(title)}</h2><span class="hint">{_esc(hint)}</span></div>
     <div class="table-scroll">
       <table class="props">
         <thead><tr>
-          <th>Player</th><th>Matchup</th><th>{_esc(prob_header)}</th><th>Best price</th><th>Book</th>
+          <th>Player</th><th>Matchup</th><th>{_esc(prob_header)}</th><th>BP Model</th><th>Best price</th><th>Book</th>
           <th>Market fair</th><th>Edge</th><th>EV (model)</th><th>EV (market)</th><th>Books</th><th>Weather</th>
+          <th title="Real games this player actually cleared this line, out of the last 15 games played">L15 clear</th>
+          <th title="Same real clearance rate over the full season - the baseline to judge L15 clear against">Season rate</th>
         </tr></thead>
         <tbody>{rows}
         </tbody>
@@ -255,6 +270,7 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     hr = report.hr_edges
     tb = report.tb_edges
     hits = report.hits_edges
+    heat_by_player = heat_lookup(hot)
 
     top_hr = next((e for e in hr if e.has_market_data), hr[0] if hr else None)
     top_tb = next((e for e in tb if e.has_market_data), tb[0] if tb else None)
@@ -354,15 +370,15 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
   </section>
 
   <section class="section">
-    {_prop_table("Best home run props", 'Ranked by our model’s EV% against the best live price - "agree" = model & market both see value', hr, "Model P(HR)", top)}
+    {_prop_table("Best home run props", 'Ranked by our model’s EV% against the best live price - "agree" = model & market both see value', hr, "Model P(HR)", top, heat_by_player, "hr")}
   </section>
 
   <section class="section">
-    {_prop_table("Best 2+ total bases props", "Ranked by our model's EV% against the best live price", tb, "Model P(2+ TB)", top)}
+    {_prop_table("Best 2+ total bases props", "Ranked by our model's EV% against the best live price", tb, "Model P(2+ TB)", top, heat_by_player, "tb2")}
   </section>
 
   <section class="section">
-    {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price - no batter/pitcher strikeout-rate data feeds this score, see the weights note below", hits, "Model P(1+ Hits)", top)}
+    {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price", hits, "Model P(1+ Hits)", top, heat_by_player, "hit")}
   </section>
 
   <section class="section">
@@ -373,7 +389,7 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     <div class="method-grid">
       <div class="method-card"><h3>Home run score (weights)</h3>{_weight_rows(HR_WEIGHTS)}</div>
       <div class="method-card"><h3>2+ total bases score (weights)</h3>{_weight_rows(TB_WEIGHTS)}</div>
-      <div class="method-card"><h3>1+ hits score (weights)</h3>{_weight_rows(HITS_WEIGHTS)}<p class="hint" style="margin-top:8px;">No strikeout/contact-rate data available (see scoring.py) - power-heavy, high-strikeout hitters may score better here than they should.</p></div>
+      <div class="method-card"><h3>1+ hits score (weights)</h3>{_weight_rows(HITS_WEIGHTS)}<p class="hint" style="margin-top:8px;">"Batter K%" and "Pitcher K% Allowed" are real per-player strikeout rates (see scoring.py) - a season-long rate stat, not a whiff rate specific to tonight's exact pitch-mix matchup.</p></div>
     </div>
     <div class="sources">
       <span class="source-chip">Statcast batted-ball quality &rarr; pybaseball / Baseball Savant</span>
@@ -389,6 +405,10 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     <p><strong>Weather is a first-class input:</strong> each pick's wind (mph, in/out) and temperature feed a heuristic HR-odds shift, weighted directly into both scores (8% of the HR score, 5% of the 2+ TB score) and shown per-pick in the Weather column.</p>
     <p><strong>Model score &ne; prediction.</strong> It's a transparent, hand-weighted heuristic calibrated to realistic MLB base rates, meant to be cross-checked against the market's own no-vig consensus (Market fair column) - not treated as ground truth.</p>
     <p>"Model + market agree" rows are where our fundamentals and the market's own cross-book pricing both say a price is generous; "model only" rows lean on our score alone and warrant more scrutiny.</p>
+    <p><strong>Data quality notes (permanent, applies every run):</strong></p>
+    <p>&middot; <strong>"EV%" means model vs. market, not "market is wrong."</strong> Every EV% figure is our model's probability compared against the book's own no-vig fair price. A positive EV% is our model disagreeing with the market in the bettor's favor, not proof the market is mispriced - the market could just as easily be right and our model wrong. Weigh it as one informed opinion against another, not a guarantee.</p>
+    <p>&middot; <strong>Pull-air% is permanently unavailable for the HR score (6% of its weight).</strong> Neither Baseball Savant leaderboard this project pulls carries a pull-rate column, and FanGraphs (which does) returns 403 to every request from this environment's hosting provider. That component defaults to 0 for every player, every run - a real, disclosed gap, not a hidden zero.</p>
+    <p>&middot; <strong>"BP Model" (HR/Hits tables, when configured) is Ballpark Pal's own independent model</strong> - a genuine second opinion, not this project's model shown twice. Their real numbers are per-plate-appearance; converted here to a per-game figure via P(at least 1 in ~4.3 PA) so it's comparable to "Model". Agreement is more reassuring than either model alone; disagreement means two different models read the matchup differently, not that one is wrong. "n/a" means not configured or no data for that matchup.</p>
   </footer>
 </div>
 </body>
