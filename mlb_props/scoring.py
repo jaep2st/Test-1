@@ -74,6 +74,11 @@ class HRScoreResult:
     temp_f: Optional[float]
     is_dome: bool
     weather_boost_pct: float  # heuristic % shift to HR odds from wind + temp
+    # Ballpark Pal's own independent per-game HR model, when configured -
+    # see mlb_props/ballparkpal.py. `None` when not configured or Ballpark
+    # Pal has no data for this matchup; never blended into `model_prob`
+    # itself, only shown alongside it as a genuine second opinion.
+    bp_model_prob: Optional[float] = None
 
 
 def compute_hr_score(
@@ -152,6 +157,13 @@ class TotalBasesScoreResult:
     temp_f: Optional[float]
     is_dome: bool
     weather_boost_pct: float
+    # No Ballpark Pal cross-check for this market: "2+ total bases" can be
+    # satisfied across multiple plate appearances (e.g. two singles), which
+    # their per-PA outcome breakdown can't represent - see
+    # mlb_props/ballparkpal.py's MatchupProbability docstring. Always None;
+    # kept only so EdgeCandidate's generic wiring doesn't need a special
+    # case for this market.
+    bp_model_prob: Optional[float] = None
 
 
 def compute_total_bases_score(
@@ -250,6 +262,9 @@ class HitsScoreResult:
     temp_f: Optional[float]
     is_dome: bool
     weather_boost_pct: float
+    # Ballpark Pal's own independent per-game Hits model, when configured -
+    # see mlb_props/ballparkpal.py. Same posture as HRScoreResult.bp_model_prob.
+    bp_model_prob: Optional[float] = None
 
 
 def compute_hits_score(

@@ -368,6 +368,19 @@ def run_pipeline(
         hr_result = compute_hr_score(batter, pitcher, matchup, park_ctx, heat)
         tb_result = compute_total_bases_score(batter, pitcher, matchup, park_ctx, heat)
         hits_result = compute_hits_score(batter, pitcher, matchup, park_ctx, heat)
+
+        # Ballpark Pal's own independent HR/Hits model for this exact
+        # matchup, when configured - a genuine second opinion surfaced
+        # alongside our own model_prob, never blended into it. See
+        # ballparkpal.py's MatchupProbability docstring for why no
+        # total-bases figure exists to attach to tb_result.
+        bp_matchup = ballparkpal.get_matchup_probability(batter_name, pitcher.player, game_date)
+        if bp_matchup is not None:
+            if bp_matchup.home_run_model_prob is not None:
+                hr_result = replace(hr_result, bp_model_prob=bp_matchup.home_run_model_prob)
+            if bp_matchup.hits_model_prob is not None:
+                hits_result = replace(hits_result, bp_model_prob=bp_matchup.hits_model_prob)
+
         hr_scores.append(hr_result)
         tb_scores.append(tb_result)
         hits_scores.append(hits_result)

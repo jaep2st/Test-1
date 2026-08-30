@@ -47,6 +47,7 @@ Real mode needs several free-but-separate data sources wired together:
 | Ballpark factors + live wind/temperature | Static table + Open-Meteo | No |
 | Cross-book player-prop odds | The Odds API (free tier, self-serve key) | Yes (props run model-only without it) |
 | Real per-hitter park + weather factor (optional upgrade) | Ballpark Pal API | Optional - falls back to the static table + Open-Meteo above without it |
+| "BP Model" cross-check column, HR/Hits (optional) | Ballpark Pal API, `/api/v1/matchups` | Optional - Ballpark Pal's own independent model shown alongside ours, not blended into it. Their real numbers are per-plate-appearance; converted to per-game via P(at least 1 in ~4.3 PA) - see `mlb_props/ballparkpal.py` |
 
 ```bash
 pip install pybaseball pandas   # only needed for real (non --mock) Statcast/matchup/form data

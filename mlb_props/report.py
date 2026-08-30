@@ -53,6 +53,11 @@ def render_hot_batters(hot_batters: List, top: int = 10) -> str:
     return "\n".join(lines)
 
 
+def _model_only_line(e: EdgeCandidate) -> str:
+    bp = f" | BP model: {_fmt_pct(e.bp_model_prob)}" if e.bp_model_prob is not None else ""
+    return f"  - {e.player} ({e.event}): model score {e.model_score:.0f}/100, est. {_fmt_pct(e.model_prob)}{bp}"
+
+
 def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int) -> str:
     lines = [f"## {title}", ""]
     if not edges:
@@ -63,11 +68,11 @@ def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int) -> str:
     if not priced:
         lines.append("(no market prices matched - showing model-only ranking below)")
         for e in edges[:top]:
-            lines.append(f"  - {e.player} ({e.event}): model score {e.model_score:.0f}/100, est. {_fmt_pct(e.model_prob)}")
+            lines.append(_model_only_line(e))
         return "\n".join(lines)
 
     lines.append(
-        f"{'Player':<20} {'Event':<16} {'Model':>7} {'Best':>7} {'Book':<10} "
+        f"{'Player':<20} {'Event':<16} {'Model':>7} {'BP Mdl':>7} {'Best':>7} {'Book':<10} "
         f"{'MktFair':>8} {'Edge':>7} {'EV(mdl)':>8} {'EV(mkt)':>8} {'Bks':>4} {'Weather':<22}"
     )
     for e in priced[:top]:
@@ -79,8 +84,14 @@ def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int) -> str:
         # fair consensus from - see edges.py's module docstring); shown as
         # "n/a" rather than crashing or hiding an otherwise-real price.
         ev_market = f"{e.ev_percent_market:+.1f}%" if e.ev_percent_market is not None else "n/a"
+        # bp_model_prob: Ballpark Pal's own independent model, when
+        # configured - see edges.py's EdgeCandidate docstring. "n/a" for
+        # 2+ TB (no honest analog exists) and whenever it isn't configured
+        # or has no data for this matchup, same as any other missing
+        # signal in this report.
+        bp_model = _fmt_opt_pct(e.bp_model_prob)
         lines.append(
-            f"{_truncate(e.player, 20):<20} {_truncate(e.event, 16):<16} {_fmt_pct(e.model_prob):>7} "
+            f"{_truncate(e.player, 20):<20} {_truncate(e.event, 16):<16} {_fmt_pct(e.model_prob):>7} {bp_model:>7} "
             f"{e.best_line.odds:>+7d} {e.best_line.sportsbook:<10} "
             f"{_fmt_opt_pct(e.market_fair_prob):>8} {_fmt_opt_signed_pct(e.edge_vs_market):>7} "
             f"{e.ev_percent_model:>+7.1f}% {ev_market:>8} {e.books_quoting:>4} {weather:<22}"
@@ -98,7 +109,7 @@ def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int) -> str:
         lines.append("")
         lines.append(f"(model-only - no book currently quotes these {len(unpriced)} candidates)")
         for e in unpriced:
-            lines.append(f"  - {e.player} ({e.event}): model score {e.model_score:.0f}/100, est. {_fmt_pct(e.model_prob)}")
+            lines.append(_model_only_line(e))
     return "\n".join(lines)
 
 
@@ -143,5 +154,12 @@ def render_report(report: SlateReport, top: int = 15) -> str:
         "  column, and FanGraphs (which does) returns 403 from this hosting provider.",
         "  That component defaults to 0 for every player, every run - a disclosed",
         "  gap, not a hidden zero.",
+        "- 'BP Model' (HR/Hits tables only, when configured) is Ballpark Pal's own",
+        "  independent model - a genuine second opinion, not this project's model shown",
+        "  twice. Their real numbers are per-plate-appearance; converted here to a",
+        "  per-game figure via P(at least 1 in ~4.3 PA) so it's comparable to 'Model'.",
+        "  Agreement between the two is more reassuring than either alone; disagreement",
+        "  means two different models read the matchup differently, not that one is",
+        "  wrong. 'n/a' means not configured or Ballpark Pal has no data for that matchup.",
     ]
     return "\n".join(sections)

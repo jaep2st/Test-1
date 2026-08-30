@@ -1,6 +1,6 @@
 from datetime import date
 
-from mlb_props.ballparkpal import BallparkPalProvider, HitterParkFactor
+from mlb_props.ballparkpal import BallparkPalProvider, HitterParkFactor, MatchupProbability
 from mlb_props.context import MockParkWeatherProvider
 from mlb_props.hot_streak import MockHotStreakProvider
 from mlb_props.market import MockMlbPropsOddsProvider
@@ -110,17 +110,21 @@ def test_pipeline_is_deterministic_with_same_seed():
 
 
 class _FakeBallparkPalProvider(BallparkPalProvider):
-    """Returns a real, known factor for exactly one player - lets a test
-    prove the override actually reaches the final report instead of just
-    trusting the wiring.
+    """Returns a real, known factor and/or matchup probability for exactly
+    one player - lets a test prove the override actually reaches the
+    final report instead of just trusting the wiring.
     """
 
-    def __init__(self, player: str, factor: HitterParkFactor):
+    def __init__(self, player: str, factor: HitterParkFactor = None, matchup: MatchupProbability = None):
         self._key = player.strip().lower()
         self._factor = factor
+        self._matchup = matchup
 
     def get_hitter_park_factor(self, player, game_date):
         return self._factor if player.strip().lower() == self._key else None
+
+    def get_matchup_probability(self, batter, pitcher, game_date):
+        return self._matchup if batter.strip().lower() == self._key else None
 
 
 def test_ballparkpal_factor_overrides_weather_boost_for_that_batter_only():
@@ -142,6 +146,38 @@ def test_ballparkpal_factor_overrides_weather_boost_for_that_batter_only():
     others = [e for e in report.hr_edges + report.tb_edges if e.player != "Aaron Judge"]
     assert others
     assert any(e.weather_boost_pct != 10.0 for e in others)
+
+
+def test_ballparkpal_matchup_probability_reaches_hr_and_hits_but_not_tb():
+    # Aaron Judge faces Grayson Rodriguez (Baltimore Orioles, MockScheduleProvider's
+    # home pitcher for this game - away batters face the home pitcher, see
+    # pipeline.py's _resolve_batters).
+    matchup = MatchupProbability(
+        batter_name="Aaron Judge", pitcher_name="Grayson Rodriguez",
+        home_run_model_prob=0.1234, hits_model_prob=0.5678,
+    )
+    report = _run(seed=1, ballparkpal=_FakeBallparkPalProvider("Aaron Judge", matchup=matchup))
+
+    judge_hr = [e for e in report.hr_edges if e.player == "Aaron Judge"]
+    judge_hits = [e for e in report.hits_edges if e.player == "Aaron Judge"]
+    judge_tb = [e for e in report.tb_edges if e.player == "Aaron Judge"]
+    assert judge_hr and judge_hits and judge_tb
+
+    for edge in judge_hr:
+        assert edge.bp_model_prob == 0.1234
+    for edge in judge_hits:
+        assert edge.bp_model_prob == 0.5678
+    for edge in judge_tb:
+        # No honest per-game Ballpark Pal analog exists for 2+ total bases
+        # (see ballparkpal.py's MatchupProbability docstring) - must never
+        # be populated, even when the provider has real HR/Hits data for
+        # this exact matchup.
+        assert edge.bp_model_prob is None
+
+    # Nobody else should be affected.
+    others_hr = [e for e in report.hr_edges if e.player != "Aaron Judge"]
+    assert others_hr
+    assert all(e.bp_model_prob is None for e in others_hr)
 
 
 def test_no_ballparkpal_provider_leaves_scoring_unchanged():

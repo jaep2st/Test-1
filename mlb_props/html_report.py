@@ -181,11 +181,15 @@ def _hot_row(rank: int, h) -> str:
 
 
 def _prop_row(e: EdgeCandidate) -> str:
+    # bp_model_prob: Ballpark Pal's own independent model, when configured
+    # (see edges.py's EdgeCandidate docstring) - "n/a" for 2+ TB and
+    # whenever it isn't configured or has no data for this matchup.
+    bp_cell = f'<td class="num">{_fmt_opt_pct(e.bp_model_prob)}</td>'
     if not e.has_market_data:
         return f"""
           <tr><td class="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div></td>
-            <td class="event">{_esc(e.event)}</td><td class="num">{_fmt_pct(e.model_prob)}</td>
-            <td colspan="7" class="wx-cell">no book currently quotes this prop</td></tr>"""
+            <td class="event">{_esc(e.event)}</td><td class="num">{_fmt_pct(e.model_prob)}</td>{bp_cell}
+            <td colspan="8" class="wx-cell">no book currently quotes this prop</td></tr>"""
     both_agree = e.ev_percent_model is not None and e.ev_percent_model > 0 and e.edge_vs_market is not None and e.edge_vs_market > 0
     if both_agree:
         tier = '<div class="tier agree">Model + market agree</div>'
@@ -205,6 +209,7 @@ def _prop_row(e: EdgeCandidate) -> str:
             <td class="player">{_esc(e.player)}{tier}</td>
             <td class="event">{_esc(e.event)}</td>
             <td class="num">{_fmt_pct(e.model_prob)}</td>
+            {bp_cell}
             <td class="num pos">{e.best_line.odds:+d}</td>
             <td class="book">{_esc(e.best_line.sportsbook)}</td>
             <td class="num">{_fmt_opt_pct(e.market_fair_prob)}</td>
@@ -239,7 +244,7 @@ def _prop_table(title: str, hint: str, edges: List[EdgeCandidate], prob_header: 
     <div class="table-scroll">
       <table class="props">
         <thead><tr>
-          <th>Player</th><th>Matchup</th><th>{_esc(prob_header)}</th><th>Best price</th><th>Book</th>
+          <th>Player</th><th>Matchup</th><th>{_esc(prob_header)}</th><th>BP Model</th><th>Best price</th><th>Book</th>
           <th>Market fair</th><th>Edge</th><th>EV (model)</th><th>EV (market)</th><th>Books</th><th>Weather</th>
         </tr></thead>
         <tbody>{rows}
@@ -392,6 +397,7 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     <p><strong>Data quality notes (permanent, applies every run):</strong></p>
     <p>&middot; <strong>"EV%" means model vs. market, not "market is wrong."</strong> Every EV% figure is our model's probability compared against the book's own no-vig fair price. A positive EV% is our model disagreeing with the market in the bettor's favor, not proof the market is mispriced - the market could just as easily be right and our model wrong. Weigh it as one informed opinion against another, not a guarantee.</p>
     <p>&middot; <strong>Pull-air% is permanently unavailable for the HR score (6% of its weight).</strong> Neither Baseball Savant leaderboard this project pulls carries a pull-rate column, and FanGraphs (which does) returns 403 to every request from this environment's hosting provider. That component defaults to 0 for every player, every run - a real, disclosed gap, not a hidden zero.</p>
+    <p>&middot; <strong>"BP Model" (HR/Hits tables, when configured) is Ballpark Pal's own independent model</strong> - a genuine second opinion, not this project's model shown twice. Their real numbers are per-plate-appearance; converted here to a per-game figure via P(at least 1 in ~4.3 PA) so it's comparable to "Model". Agreement is more reassuring than either model alone; disagreement means two different models read the matchup differently, not that one is wrong. "n/a" means not configured or no data for that matchup.</p>
   </footer>
 </div>
 </body>
