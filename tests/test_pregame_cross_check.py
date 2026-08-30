@@ -9,6 +9,14 @@ scenarios confirmed live (2026-08-29):
    The Odds API exposed only ONE event per matchup, with no way to tell
    which specific game (one Final/in-progress, one still pregame) a price
    belonged to.
+
+Also reproduces the real bug confirmed live (2026-08-30): Cincinnati Reds
+@ Chicago Cubs sat at MLB's real "Delayed Start" status (held before first
+pitch) while draftkings/betmgm/betrivers already had real, live batter_hits/
+batter_total_bases/batter_home_runs prices posted for it - but
+_PREGAME_STATUSES didn't recognize "Delayed Start" as pregame, so this
+safety net silently dropped all 207 real odds lines for that game, even
+though it genuinely hadn't started yet.
 """
 
 from mlb_props.pipeline import _filter_lines_to_confirmed_pregame_games
@@ -100,3 +108,29 @@ def test_normal_pregame_game_is_unaffected():
     kept = _filter_lines_to_confirmed_pregame_games(lines, slate)
 
     assert kept == lines
+
+
+def test_delayed_start_counts_as_pregame_not_dropped():
+    # Reproduces the exact real bug (2026-08-30): Cincinnati Reds @ Chicago
+    # Cubs was held before first pitch ("Delayed Start" per MLB's own
+    # detailedState) while books already had real prices posted. Those
+    # lines must survive this filter, not get silently dropped.
+    slate = [_matchup("Cincinnati Reds", "Chicago Cubs", "Delayed Start")]
+    lines = [_line("Cincinnati Reds @ Chicago Cubs")]
+
+    kept = _filter_lines_to_confirmed_pregame_games(lines, slate)
+
+    assert kept == lines
+
+
+def test_mid_game_delay_is_still_dropped_not_swept_in_by_a_broad_match():
+    # A game that started and then got held ("In Progress - Delayed") is
+    # genuinely not pregame anymore - only the exact "Delayed Start" status
+    # (held before first pitch) should count, not any status containing
+    # "delayed".
+    slate = [_matchup("Team A", "Team B", "In Progress - Delayed")]
+    lines = [_line("Team A @ Team B")]
+
+    kept = _filter_lines_to_confirmed_pregame_games(lines, slate)
+
+    assert kept == []
