@@ -57,6 +57,10 @@ on:
         type: boolean
         required: false
         default: false
+      name_lookup_check:
+        description: "Space-separated player full names (e.g. 'Gunnar Henderson' 'Pete Alonso' - quote each name) to check directly against the real Baseball Savant leaderboard, isolated from the rest of the pipeline. Leave blank to skip. Printed to this job's log, not the published report."
+        required: false
+        default: ""
   schedule:
     # Twice daily, timed around the US MLB slate (adjust to taste - both
     # are UTC, since GitHub Actions schedule: doesn't support local time):
@@ -178,6 +182,21 @@ jobs:
           BALLPARKPAL_API_KEY: ${{ secrets.BALLPARKPAL_API_KEY }}
         run: |
           python mlb_props_main.py --ballparkpal-matchups-check --date "${{ inputs.date || 'today' }}"
+
+      - name: Check specific player names against the real Savant leaderboard
+        if: ${{ inputs.name_lookup_check != '' }}
+        env:
+          NAME_LOOKUP_INPUT: ${{ inputs.name_lookup_check }}
+        run: |
+          # Parsed with Python's shlex (not eval/word-splitting) so a
+          # workflow_dispatch input can't inject shell commands - same
+          # shell-injection-avoidance posture as BOOKS_ARGS above, just
+          # for a free-text field where names can contain spaces.
+          NAMES=()
+          while IFS= read -r name; do
+            NAMES+=(--batters "$name")
+          done < <(python3 -c "import shlex, sys; print(chr(10).join(shlex.split(sys.argv[1])))" "$NAME_LOOKUP_INPUT")
+          python mlb_props_main.py --name-lookup-check "${NAMES[@]}"
 
       - uses: actions/upload-pages-artifact@v3
         with:

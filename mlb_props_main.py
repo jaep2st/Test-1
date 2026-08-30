@@ -64,7 +64,7 @@ from mlb_props.pipeline import run_pipeline
 from mlb_props.pdf_report import render_pdf_report
 from mlb_props.report import render_report
 from mlb_props.schedule import MLB_STATS_API_BASE, MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
-from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider
+from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider, _find_player_row
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +288,62 @@ def run_ballparkpal_matchups_check(game_date: date, api_key: str) -> str:
     return "\n".join(out)
 
 
+def run_name_lookup_check(names: List[str], year: int) -> str:
+    """Standalone diagnostic for `--name-lookup-check`: looks up each given
+    player name directly against the real, live Baseball Savant leaderboard
+    `_find_player_row()` actually uses - isolated from the rest of the
+    pipeline (real schedule fetch, real posted lineups, real odds), so a
+    batter who's silently absent from a full run's candidate pool can be
+    checked on their own: does the Savant lookup itself succeed or fail for
+    this exact name, right now?
+
+    Exists because a full run's own GitHub Actions log is too large to
+    inspect after the fact for one specific player's lookup outcome (a
+    log-reading tool that caps at roughly the last ~2000 lines of a real
+    run only ever sees the final report, never the early "Skipping X - no
+    Statcast batter profile available" warnings from earlier in that same
+    run) - this gives a direct, small, targeted answer instead of trying to
+    infer one from a full run's tail.
+    """
+    provider = PybaseballStatcastProvider(year=year)
+    pyb = provider._pyb()
+    barrels = pyb.statcast_batter_exitvelo_barrels(year, minBBE=provider.min_bbe)
+    expected = pyb.statcast_batter_expected_stats(year, minPA=provider.min_bbe)
+
+    out: List[str] = [f"NAME LOOKUP CHECK (Baseball Savant, real leaderboard) - {year}", ""]
+    out.append(
+        f"{len(barrels)} real batters in the exitvelo/barrels leaderboard (min {provider.min_bbe} BBE), "
+        f"{len(expected)} in the expected-stats leaderboard (min {provider.min_bbe} PA)."
+    )
+    out.append("")
+
+    name_col = next((c for c in ("player_name", "last_name, first_name", "Name", "name") if c in barrels.columns), None)
+
+    for name in names:
+        match = _find_player_row(barrels, name)
+        exp_match = _find_player_row(expected, name)
+        if not match.empty:
+            real_name = match.iloc[0][name_col] if name_col else "?"
+            out.append(
+                f"MATCH: {name!r} -> barrels row found (Savant name: {real_name!r}); "
+                f"expected-stats row {'found' if not exp_match.empty else 'MISSING'}"
+            )
+        else:
+            out.append(f"NO MATCH: {name!r} not found in barrels leaderboard (min_bbe={provider.min_bbe}).")
+            if name_col:
+                last = name.strip().split()[-1].lower()
+                close = barrels[barrels[name_col].astype(str).str.lower().str.contains(last, na=False, regex=False)]
+                if not close.empty:
+                    out.append(f"  Rows containing {last!r}: {list(close[name_col].head(5))}")
+                else:
+                    out.append(
+                        f"  No row even contains {last!r} - this player likely doesn't clear "
+                        f"min_bbe={provider.min_bbe} yet this season, or isn't on this leaderboard at all "
+                        "(real absence, not a name-matching bug)."
+                    )
+    return "\n".join(out)
+
+
 def run_game_status_check(game_date: date) -> str:
     """Standalone diagnostic for `--game-status-check`: pulls MLB's own
     authoritative real-time game status (Scheduled/In Progress/Final, with
@@ -406,6 +462,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "strikeoutProbability against real MLB base rates. Requires --ballparkpal-api-key/BALLPARKPAL_API_KEY. "
         "Diagnostic only - see mlb_props/ballparkpal.py for why this endpoint isn't used in scoring yet.",
     )
+    parser.add_argument(
+        "--name-lookup-check",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead look up each --batters name directly "
+        "against the real, live Baseball Savant leaderboard - isolated from the rest of the pipeline (real "
+        "schedule/lineups/odds), so a player silently missing from a full run's candidate pool can be checked "
+        "on their own: does the Savant name lookup succeed or fail for this exact name, right now? Requires "
+        "--batters (repeatable) and --year.",
+    )
     return parser.parse_args(argv)
 
 
@@ -420,6 +485,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             with open(args.out, "w") as f:
                 f.write(text + "\n")
             logger.info("Wrote game status check to %s", args.out)
+        return 0
+
+    if args.name_lookup_check:
+        if not args.batters:
+            print("Configuration error: --name-lookup-check requires --batters (repeatable).", file=sys.stderr)
+            return 2
+        text = run_name_lookup_check(args.batters, args.year or args.game_date.year)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote name lookup check to %s", args.out)
         return 0
 
     if args.ballparkpal_matchups_check:
