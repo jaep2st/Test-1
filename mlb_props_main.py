@@ -42,6 +42,7 @@ except ImportError:
 
 from collections import defaultdict
 
+from odds_monitor.http_utils import build_retrying_session
 from odds_monitor.providers.base import OddsProvider
 from odds_monitor.providers.betstamp import BetstampProvider
 from odds_monitor.providers.fallback import FallbackOddsProvider
@@ -54,7 +55,7 @@ from mlb_props.matchup import MatchupProvider, MockMatchupProvider, PybaseballMa
 from mlb_props.html_report import render_html_report
 from mlb_props.pipeline import run_pipeline
 from mlb_props.report import render_report
-from mlb_props.schedule import MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
+from mlb_props.schedule import MLB_STATS_API_BASE, MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
 from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider
 
 logger = logging.getLogger(__name__)
@@ -205,6 +206,52 @@ def run_live_odds_scan(odds_api_key: str, books: Optional[List[str]]) -> str:
     return "\n".join(out)
 
 
+def run_game_status_check(game_date: date) -> str:
+    """Standalone diagnostic for `--game-status-check`: pulls MLB's own
+    authoritative real-time game status (Scheduled/In Progress/Final, with
+    inning for in-progress games) directly from the MLB Stats API's
+    schedule endpoint - the same host `MlbStatsApiScheduleProvider` already
+    uses for the slate/probable-pitchers, just reading its `status` field
+    too (unused elsewhere in this project).
+
+    This exists specifically because `TheOddsApiProvider`'s live-game
+    filter (see that module's `include_live` docstring) relies on The Odds
+    API's own `commence_time` per event, and that has been confirmed wrong
+    for at least one real game (2026-08-29: Kansas City @ Cleveland showed
+    as not-yet-started there while it had actually started) - MLB's own
+    schedule endpoint is the actual source of truth for game state, not a
+    third-party odds aggregator's copy of it.
+    """
+    session = build_retrying_session()
+    resp = session.get(
+        f"{MLB_STATS_API_BASE}/schedule",
+        params={"sportId": 1, "date": game_date.isoformat()},
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+
+    out: List[str] = [f"GAME STATUS CHECK (MLB Stats API, authoritative) - {game_date.isoformat()}", ""]
+    games = [g for block in payload.get("dates", []) for g in block.get("games", [])]
+    if not games:
+        out.append("No games found for this date.")
+        return "\n".join(out)
+
+    for game in games:
+        try:
+            teams = game["teams"]
+            away = teams["away"]["team"]["name"]
+            home = teams["home"]["team"]["name"]
+            status = game.get("status", {}).get("detailedState", "Unknown")
+            inning = game.get("linescore", {}).get("currentInningOrdinal")
+            half = game.get("linescore", {}).get("inningState")
+            when = f" ({half} {inning})" if inning and half else ""
+            out.append(f"  {away} @ {home}: {status}{when}")
+        except (KeyError, TypeError):
+            out.append(f"  (unparsable game entry: {game.get('gamePk', '?')})")
+    return "\n".join(out)
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Find +EV MLB home run, 2+ total bases, and 1+ hits props using Statcast quality-of-contact, "
@@ -246,12 +293,30 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "for real cross-book price value (never compared to this model's pregame-only score - see "
         "odds_monitor/providers/theoddsapi.py). Requires --odds-api-key/ODDS_API_KEY.",
     )
+    parser.add_argument(
+        "--game-status-check",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead print MLB's own authoritative "
+        "real-time game status (Scheduled/In Progress/Final) for every game on --date, straight from the "
+        "MLB Stats API - useful for cross-checking whether a game the odds pipeline treated as pregame has "
+        "actually already started (see theoddsapi.py's commence_time-based filter, which relies on a "
+        "third-party copy of this same information and has been confirmed wrong for at least one real game).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    if args.game_status_check:
+        text = run_game_status_check(args.game_date)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote game status check to %s", args.out)
+        return 0
 
     if args.live_odds_scan:
         odds_api_key = args.odds_api_key or os.environ.get("ODDS_API_KEY")

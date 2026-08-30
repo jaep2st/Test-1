@@ -44,6 +44,11 @@ on:
         type: boolean
         required: false
         default: false
+      game_status_check:
+        description: "Also run --game-status-check (prints MLB's own authoritative real-time game status for every game today, straight from the MLB Stats API; printed to this job's log, not the published report)."
+        type: boolean
+        required: false
+        default: false
   schedule:
     # Twice daily, timed around the US MLB slate (adjust to taste - both
     # are UTC, since GitHub Actions schedule: doesn't support local time):
@@ -136,6 +141,14 @@ jobs:
             done
           fi
           python mlb_props_main.py --live-odds-scan "${BOOKS_ARGS[@]}"
+
+      - name: Cross-check real-time game status against MLB's own API
+        if: ${{ inputs.game_status_check }}
+        run: |
+          # Independent of The Odds API's commence_time (confirmed live
+          # 2026-08-29 to be wrong for at least one real game) - MLB's own
+          # schedule endpoint is the actual source of truth for game state.
+          python mlb_props_main.py --game-status-check --date "${{ inputs.date || 'today' }}"
 
       - uses: actions/upload-pages-artifact@v3
         with:
