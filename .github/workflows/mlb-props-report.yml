@@ -39,7 +39,7 @@ on:
         required: false
         default: "0"
       books:
-        description: "Restrict odds to these sportsbook IDs, space-separated (e.g. 'draftkings fanduel betmgm caesars espnbet betrivers'). Leave blank for all books."
+        description: "Restrict odds to these sportsbook IDs, space-separated. Leave blank for the default (fanduel draftkings betmgm betrivers espnbet - 'espnbet' is theScore Bet's real Odds API key). Type 'all' for every book Odds API returns."
         required: false
         default: ""
       live_odds_scan:
@@ -115,12 +115,23 @@ jobs:
           #
           # BOOKS_ARGS is built from the env var (not interpolated directly
           # into this script) to avoid shell-injection from the workflow_dispatch
-          # input; --books is repeatable on the CLI, one flag per book. Empty
-          # input -> empty array -> TheOddsApiProvider's default of "all books",
-          # so the twice-daily scheduled runs (which never set this input) are
-          # unaffected.
+          # input; --books is repeatable on the CLI, one flag per book.
+          #
+          # DEFAULT_BOOKS applies whenever BOOKS_INPUT is empty - which is
+          # every scheduled run (the `schedule:` trigger has no `inputs`
+          # context at all, so BOOKS_INPUT is always empty there, not just
+          # "left blank") and any manual run that doesn't override it. Real
+          # Odds API keys, confirmed live against the-odds-api.com's own
+          # bookmaker list: 'espnbet' is theScore Bet's key (kept through
+          # the ESPN Bet rebrand - the docs list it as "theScore Bet",
+          # "Formerly ESPN Bet"). A manual run can still type 'all' in the
+          # books field to see every book Odds API returns, unrestricted.
+          DEFAULT_BOOKS="fanduel draftkings betmgm betrivers espnbet"
+          if [ -z "$BOOKS_INPUT" ]; then
+            BOOKS_INPUT="$DEFAULT_BOOKS"
+          fi
           BOOKS_ARGS=()
-          if [ -n "$BOOKS_INPUT" ]; then
+          if [ "$BOOKS_INPUT" != "all" ]; then
             for b in $BOOKS_INPUT; do
               BOOKS_ARGS+=(--books "$b")
             done
