@@ -40,7 +40,15 @@ from odds_monitor.ev import american_to_decimal, find_fair_prices
 from odds_monitor.models import PropLine
 
 from .edges import EdgeCandidate
-from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES, RECOMMENDED_SIDE_FOR_MARKET
+from .market import (
+    HITS_LINE_FOR_1PLUS,
+    HOME_RUN_LINE_FOR_1PLUS,
+    MARKET_HITS,
+    MARKET_HOME_RUN,
+    MARKET_TOTAL_BASES,
+    RECOMMENDED_SIDE_FOR_MARKET,
+    TOTAL_BASES_LINE_FOR_2PLUS,
+)
 from .pipeline import SlateReport
 
 # Real bet-sizing constants, every one deliberately conservative - see
@@ -58,6 +66,22 @@ _MARKET_LABELS = {
     MARKET_HOME_RUN: "1+ HR",
     MARKET_TOTAL_BASES: "2+ Total Bases",
     MARKET_HITS: "1+ Hits",
+}
+
+# The one standard/expected point tier this project ever scores or
+# recommends for each market - same constants edges.py's own
+# `_fair_price_lookup`/`_single_sided_lookup` already restrict to for the
+# pregame path, and needed here for the identical reason: a book can quote
+# several real point tiers under the same side (e.g. betrivers' live
+# batter_home_runs market posting "Over" at 0.5, 1.5, and 2.5 all at once,
+# confirmed live), and `find_fair_prices` returns one real `FairPrice` per
+# tier it can de-vig - without this restriction, a much-longer-shot tier's
+# price (and its correspondingly inflated "edge" vs. the standard line's
+# fair probability) can silently get treated as the standard line's.
+_EXPECTED_LINE_FOR_MARKET = {
+    MARKET_HOME_RUN: HOME_RUN_LINE_FOR_1PLUS,
+    MARKET_TOTAL_BASES: TOTAL_BASES_LINE_FOR_2PLUS,
+    MARKET_HITS: HITS_LINE_FOR_1PLUS,
 }
 
 
@@ -233,11 +257,16 @@ def build_live_value_bets(odds_lines: List[PropLine]) -> List[LiveValueBet]:
     trusted, since this function's whole point is real-time in-game
     pricing, not a stale pregame line that happened to be in the same
     list. Restricted to this project's own three real markets and their
-    recommended side (RECOMMENDED_SIDE_FOR_MARKET) - same posture as
-    edges.py's `_single_sided_lookup` restricting to the standard line,
-    for the same reason: a live market can post several point tiers
-    (0.5/1.5/2.5+ HR) under the same side, and picking "best price"
-    across all of them would silently swap in a longer-shot bet.
+    recommended side (RECOMMENDED_SIDE_FOR_MARKET) AND this project's one
+    standard/expected point tier per market (_EXPECTED_LINE_FOR_MARKET) -
+    same posture as edges.py's `_fair_price_lookup`/`_single_sided_lookup`
+    restricting to the standard line, for the same reason: a live market
+    can post several real point tiers (0.5/1.5/2.5+ HR) under the same
+    side, and picking "best price"/best EV% across all of them would
+    silently swap in a longer-shot tier's price and its correspondingly
+    inflated "edge" (confirmed live: betrivers' batter_home_runs market
+    posting "Over" at 0.5, 1.5, and 2.5 simultaneously for the same
+    player).
 
     Returns every real live price that clears MIN_EV_PERCENT_FOR_LIVE,
     sorted by EV% descending. Empty when nothing does - including when no
@@ -254,6 +283,9 @@ def build_live_value_bets(odds_lines: List[PropLine]) -> List[LiveValueBet]:
     out: List[LiveValueBet] = []
     for fp in fair_prices:
         if fp.side.lower() != RECOMMENDED_SIDE_FOR_MARKET.get(fp.market, ""):
+            continue
+        expected_line = _EXPECTED_LINE_FOR_MARKET.get(fp.market)
+        if expected_line is None or abs(fp.line - expected_line) > 1e-6:
             continue
         if fp.ev_percent < MIN_EV_PERCENT_FOR_LIVE:
             continue

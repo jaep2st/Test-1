@@ -197,6 +197,42 @@ def test_build_live_value_bets_excludes_edges_below_the_higher_live_bar():
     assert all(b.ev_percent >= MIN_EV_PERCENT_FOR_LIVE for b in bets)
 
 
+def test_build_live_value_bets_ignores_a_longer_shot_point_tier_quoted_by_the_same_side():
+    # Confirmed live: betrivers' batter_home_runs market posts "Over" at
+    # multiple real point tiers (0.5, 1.5, 2.5) for the same player at
+    # once. Only the standard 0.5 ("1+ HR") tier is this project's real
+    # market - a longer-shot tier (e.g. 1.5, "2+ HR") must never leak into
+    # the results just because find_fair_prices could de-vig it too.
+    lines = [
+        _live_line("Player A", "yes", 900, "draftkings", market="batter_home_runs"),
+        _live_line("Player A", "no", -900, "draftkings", market="batter_home_runs"),
+        _live_line("Player A", "yes", 650, "betmgm", market="batter_home_runs"),
+        _live_line("Player A", "no", -1200, "betmgm", market="batter_home_runs"),
+    ]
+    longer_shot_tier = [
+        PropLine(player="Player A", team=None, league="mlb", market="batter_home_runs", side="yes", line=1.5, odds=2900, sportsbook="betrivers", event="Team X @ Team Y", is_live=True),
+        PropLine(player="Player A", team=None, league="mlb", market="batter_home_runs", side="yes", line=1.5, odds=2500, sportsbook="fanduel", event="Team X @ Team Y", is_live=True),
+        PropLine(player="Player A", team=None, league="mlb", market="batter_home_runs", side="no", line=1.5, odds=-3500, sportsbook="betrivers", event="Team X @ Team Y", is_live=True),
+        PropLine(player="Player A", team=None, league="mlb", market="batter_home_runs", side="no", line=1.5, odds=-3000, sportsbook="fanduel", event="Team X @ Team Y", is_live=True),
+    ]
+    bets = build_live_value_bets(lines + longer_shot_tier)
+    assert len(bets) == 1
+    assert bets[0].best_price == 900  # the standard 0.5 tier's price, never the 1.5 tier's inflated one
+
+
+def test_build_live_value_bets_finds_nothing_when_only_a_non_standard_tier_is_two_sided():
+    # Same real-world shape as above, but with NO standard-tier pricing at
+    # all - only a longer-shot tier is de-vig-able. Must return nothing,
+    # not silently substitute the wrong tier.
+    lines = [
+        PropLine(player="Player A", team=None, league="mlb", market="batter_home_runs", side="yes", line=1.5, odds=2900, sportsbook="betrivers", event="Team X @ Team Y", is_live=True),
+        PropLine(player="Player A", team=None, league="mlb", market="batter_home_runs", side="yes", line=1.5, odds=2500, sportsbook="fanduel", event="Team X @ Team Y", is_live=True),
+        PropLine(player="Player A", team=None, league="mlb", market="batter_home_runs", side="no", line=1.5, odds=-3500, sportsbook="betrivers", event="Team X @ Team Y", is_live=True),
+        PropLine(player="Player A", team=None, league="mlb", market="batter_home_runs", side="no", line=1.5, odds=-3000, sportsbook="fanduel", event="Team X @ Team Y", is_live=True),
+    ]
+    assert build_live_value_bets(lines) == []
+
+
 def test_build_live_value_bets_sorted_by_ev_descending():
     lines = [
         _live_line("Player A", "yes", 900, "draftkings", event="Game 1"),
