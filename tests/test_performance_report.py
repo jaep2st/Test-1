@@ -1,0 +1,81 @@
+"""Covers mlb_props/performance_report.py - renders without error on both
+an empty data directory (day one, before any results exist) and a
+populated one, and shows the real numbers it computed rather than hiding
+them.
+"""
+
+import os
+from datetime import datetime, timezone
+
+from mlb_props.performance_report import REFIT_READY_DAYS, render_performance_report
+from mlb_props.results import ClvRecord, GameOutcome, PickRecord, _append_jsonl
+
+
+def _pick(player, game_date="2026-08-20", **overrides):
+    defaults = dict(
+        game_date=game_date,
+        recorded_at="2026-08-20T18:00:00+00:00",
+        player=player,
+        market="batter_home_runs",
+        event="Team A @ Team B",
+        tier="agree",
+        model_score=70.0,
+        model_prob=0.15,
+        bp_model_prob=None,
+        market_fair_prob=0.10,
+        best_price=650,
+        best_book="draftkings",
+        ev_percent_model=25.0,
+        ev_percent_market=15.0,
+        edge_vs_market=0.05,
+        books_quoting=4,
+    )
+    defaults.update(overrides)
+    return PickRecord(**defaults)
+
+
+def test_renders_without_error_on_a_completely_empty_data_dir(tmp_path):
+    html = render_performance_report(str(tmp_path))
+    assert html.strip().startswith("<!doctype html>")
+    assert "No resolved picks yet" in html
+    assert f"{REFIT_READY_DAYS} days" in html  # the not-ready-yet framing
+
+
+def test_renders_real_numbers_from_populated_data(tmp_path):
+    os.makedirs(tmp_path / "picks")
+    os.makedirs(tmp_path / "results")
+    os.makedirs(tmp_path / "clv")
+    _append_jsonl([_pick("Player A")], str(tmp_path / "picks" / "2026-08-20.jsonl"))
+    _append_jsonl(
+        [GameOutcome(game_date="2026-08-20", player="Player A", got_hr=True, got_2plus_tb=True, got_hit=True)],
+        str(tmp_path / "results" / "2026-08-20.jsonl"),
+    )
+    _append_jsonl(
+        [
+            ClvRecord(
+                game_date="2026-08-20", recorded_at="x", player="Player A", market="batter_home_runs",
+                event="Team A @ Team B", pick_price=650, pick_book="draftkings", closing_price=550,
+                closing_book="draftkings", clv_percent=15.4,
+            )
+        ],
+        str(tmp_path / "clv" / "2026-08-20.jsonl"),
+    )
+    html = render_performance_report(str(tmp_path), generated_at=datetime(2026, 8, 21, tzinfo=timezone.utc))
+    assert "Player A" in html
+    assert "100.0%" in html  # real hit rate tile
+    assert "+15.4%" in html  # mean CLV tile
+    assert "1 real day" in html
+
+
+def test_escapes_malicious_player_name_in_pick_log(tmp_path):
+    os.makedirs(tmp_path / "picks")
+    os.makedirs(tmp_path / "results")
+    malicious = "<script>alert(1)</script>"
+    _append_jsonl([_pick(malicious)], str(tmp_path / "picks" / "2026-08-20.jsonl"))
+    _append_jsonl(
+        [GameOutcome(game_date="2026-08-20", player=malicious, got_hr=True, got_2plus_tb=True, got_hit=True)],
+        str(tmp_path / "results" / "2026-08-20.jsonl"),
+    )
+    html = render_performance_report(str(tmp_path))
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html

@@ -99,6 +99,26 @@ PARK_COORDS: Dict[str, Tuple[float, float, float]] = {
     # found for it, and shipping a guessed bearing risks silently flipping
     # "wind out" to "wind in" for every game there - worse than the honest
     # zero-wind-effect fallback this park already gets by being absent here.
+    #
+    # Same "don't guess" policy applies to the ~13 other real, currently
+    # active open-air parks still missing from this table (Angel Stadium,
+    # Busch Stadium, Citizens Bank Park, Comerica Park, Great American Ball
+    # Park, Guaranteed Rate Field, Kauffman Stadium, Nationals Park, PNC
+    # Park, Petco Park, Progressive Field, T-Mobile Park, Target Field).
+    # Attempted to verify their real coordinates/bearings live (2026-08-31)
+    # via the adhoc-fetch.yml research workflow - Wikipedia's stadium list
+    # page didn't carry per-park compass bearings in a machine-parseable
+    # form, and the one purpose-built orientation-data source tried
+    # (andrewclem.com) failed TLS certificate validation from the runner. A
+    # wrong bearing silently flips "wind out" to "wind in", which is worse
+    # than this honest, disclosed gap - these parks keep the same
+    # zero-wind-effect fallback as any other missing entry until real,
+    # verified data is found. This is a real, undersized park-coverage gap
+    # for the weather-orientation feature (10 of the ~26 real open-air
+    # parks covered), not a design gap - the resolution logic itself
+    # (LiveParkWeatherProvider.get_context below) already correctly uses
+    # real center-field bearing, not just raw wind mph, for every park
+    # that IS in this table.
 }
 
 DOME_PARKS = {

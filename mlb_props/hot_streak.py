@@ -35,6 +35,32 @@ logger = logging.getLogger(__name__)
 LEAGUE_AVG_WOBA = 0.315
 WOBA_15D_STDEV = 0.045
 
+# WOBA_15D_STDEV above is calibrated for an everyday player's typical real
+# plate-appearance count over a 15-day/15-game window - not a fixed
+# per-player constant. A genuinely smaller sample (a part-time player, a
+# recent callup, someone a few games off the IL) has a noisier last15_woba
+# than that calibration assumes, so a hot streak built on a handful of real
+# PA used to swing z_score exactly as hard as one built on a full sample -
+# a real bug (3-for-5 read as "scorching", same as a real 20-for-55).
+# Standard error scales with 1/sqrt(PA), so `_shrunk_woba_stdev` below
+# scales WOBA_15D_STDEV up the same way whenever last15_pa falls short of
+# this reference, pulling z_score toward 0 in proportion to how little real
+# data backs it - the smaller the sample, the less it can move the score.
+# ~4.3 PA/game (a real, typical MLB rate) * 15 team-games.
+REFERENCE_PA_FOR_15D_STDEV = 58
+
+
+def _shrunk_woba_stdev(last15_pa: int) -> float:
+    """The effective stdev to divide a last15-vs-season wOBA gap by, scaled
+    up (never down - a bigger-than-reference sample doesn't make the base
+    calibration itself more precise) for a below-reference real PA count.
+    See REFERENCE_PA_FOR_15D_STDEV's docstring.
+    """
+    if last15_pa <= 0:
+        return float("inf")
+    reference_pa = min(last15_pa, REFERENCE_PA_FOR_15D_STDEV)
+    return WOBA_15D_STDEV * (REFERENCE_PA_FOR_15D_STDEV / reference_pa) ** 0.5
+
 
 # Real total-base value per Statcast `events` outcome. Only PA-ending
 # events appear in the per-PA log this is computed from (strikeout, walk,
@@ -219,7 +245,11 @@ class StatcastHotStreakProvider(HotStreakProvider):
         last7_woba, _ = woba_and_pa_since(7)
 
         season_woba = season_woba if season_woba is not None else LEAGUE_AVG_WOBA
-        z = (last15_woba - season_woba) / WOBA_15D_STDEV if last15_woba is not None else 0.0
+        # Shrunk toward 0 for a below-reference last15_pa - see
+        # _shrunk_woba_stdev's docstring. A player with zero real
+        # plate appearances in the window (last15_woba is None) already
+        # falls through to the honest neutral z=0.0, not a guessed streak.
+        z = (last15_woba - season_woba) / _shrunk_woba_stdev(last15_pa) if last15_woba is not None else 0.0
 
         # Real per-game clearance counts, grouped from the same per-PA log
         # already fetched above - no extra network cost. String `game_date`
@@ -284,7 +314,11 @@ class PybaseballHotStreakProvider(HotStreakProvider):
         last7_woba, _ = self._range_woba(pyb, player, today - timedelta(days=7), today)
         last15_woba, last15_pa = self._range_woba(pyb, player, today - timedelta(days=15), today)
         last30_woba, _ = self._range_woba(pyb, player, today - timedelta(days=30), today)
-        z = (last15_woba - season_woba) / WOBA_15D_STDEV if season_woba else 0.0
+        # See StatcastHotStreakProvider's use of _shrunk_woba_stdev above -
+        # same shrinkage, same reasoning, kept consistent between the two
+        # real providers even though this one isn't the one actually wired
+        # up (see class docstring).
+        z = (last15_woba - season_woba) / _shrunk_woba_stdev(last15_pa) if season_woba else 0.0
         return HeatIndex(
             player=player,
             season_woba=season_woba,

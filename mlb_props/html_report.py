@@ -17,119 +17,8 @@ from .hot_streak import HeatIndex
 from .pipeline import MatchupEnvironment, SlateReport
 from .report import clearance_cols, heat_lookup
 from .scoring import HITS_WEIGHTS, HR_WEIGHTS, TB_WEIGHTS
-
-_STYLE = """
-:root{
-  --bg:#F6F8F2; --surface:#FFFFFF; --surface-2:#ECF1E5; --border:#D6DECB;
-  --ink:#172319; --ink-muted:#57614F; --accent:#B36D0C; --accent-strong:#8A5308;
-  --accent-tint:#F3E3C6; --positive:#1C7A4C; --positive-tint:#DFF1E7;
-  --negative:#B23A2E; --negative-tint:#F6E1DE; --info:#3E6E96;
-  --shadow: 0 1px 2px rgba(23,35,25,0.06), 0 8px 24px -12px rgba(23,35,25,0.18);
-}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#0A130E; --surface:#101C15; --surface-2:#16241B; --border:#223328;
-    --ink:#E9F1E6; --ink-muted:#9DB0A2; --accent:#FFC155; --accent-strong:#FFD98A;
-    --accent-tint:#3A2C0F; --positive:#6FE0A0; --positive-tint:#123322;
-    --negative:#FF8A7A; --negative-tint:#3A1913; --info:#8FC3EA;
-    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 12px 30px -14px rgba(0,0,0,0.6);
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#0A130E; --surface:#101C15; --surface-2:#16241B; --border:#223328;
-  --ink:#E9F1E6; --ink-muted:#9DB0A2; --accent:#FFC155; --accent-strong:#FFD98A;
-  --accent-tint:#3A2C0F; --positive:#6FE0A0; --positive-tint:#123322;
-  --negative:#FF8A7A; --negative-tint:#3A1913; --info:#8FC3EA;
-  --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 12px 30px -14px rgba(0,0,0,0.6);
-}
-*{ box-sizing:border-box; }
-body{ margin:0; background:var(--bg); color:var(--ink); font-family:"Public Sans",-apple-system,"Segoe UI",sans-serif; line-height:1.45; -webkit-font-smoothing:antialiased; }
-h1,h2,h3{ font-family:"Big Shoulders Display","Arial Narrow",sans-serif; text-wrap:balance; margin:0; }
-.num{ font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
-a{ color:var(--info); }
-.wrap{ max-width:1180px; margin:0 auto; padding:28px 20px 80px; }
-header.top{ display:flex; align-items:flex-end; justify-content:space-between; gap:20px; flex-wrap:wrap; padding-bottom:18px; margin-bottom:16px; border-bottom:3px solid var(--ink); }
-.brand{ display:flex; align-items:baseline; gap:12px; }
-.brand .mark{ font-family:"Big Shoulders Display",sans-serif; font-weight:800; font-size:15px; letter-spacing:.14em; color:var(--accent); border:2px solid var(--accent); border-radius:4px; padding:3px 7px; line-height:1; }
-h1.title{ font-size:clamp(30px,4.6vw,44px); font-weight:800; letter-spacing:.01em; }
-.subtitle{ color:var(--ink-muted); font-size:14.5px; margin-top:4px; max-width:56ch; }
-.meta{ text-align:right; font-size:13px; color:var(--ink-muted); }
-.meta .date{ font-family:"IBM Plex Mono",monospace; font-size:15px; color:var(--ink); font-weight:600; }
-.status-bug{ display:flex; align-items:center; gap:10px; border-radius:8px; padding:10px 14px; font-size:13.5px; font-weight:600; margin-bottom:26px; border:1.5px solid; }
-.status-bug.live{ background:var(--positive-tint); border-color:var(--positive); color:var(--positive); }
-.status-bug.sample{ background:var(--negative-tint); border-color:var(--negative); color:var(--negative); }
-.status-bug .dot{ width:8px; height:8px; border-radius:50%; background:currentColor; flex:none; }
-.status-bug span.detail{ color:var(--ink-muted); font-weight:400; }
-.section{ margin-top:44px; }
-.section-head{ display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:14px; flex-wrap:wrap; }
-.section-head h2{ font-size:24px; font-weight:700; letter-spacing:.01em; }
-.section-head .hint{ font-size:12.5px; color:var(--ink-muted); text-transform:uppercase; letter-spacing:.08em; }
-.eyebrow{ font-family:"Big Shoulders Display",sans-serif; font-weight:700; font-size:12.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin-bottom:6px; display:block; }
-.tiles{ display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
-@media (max-width:820px){ .tiles{ grid-template-columns:repeat(2,1fr); } }
-.tile{ background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px 16px 14px; box-shadow:var(--shadow); }
-.tile .label{ font-size:11.5px; text-transform:uppercase; letter-spacing:.09em; color:var(--ink-muted); font-weight:600; }
-.tile .value{ font-size:24px; font-weight:600; margin-top:6px; }
-.tile .sub{ font-size:13px; color:var(--ink-muted); margin-top:4px; }
-.tile .sub b{ color:var(--ink); font-weight:600; }
-.env-grid{ display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
-@media (max-width:760px){ .env-grid{ grid-template-columns:1fr; } }
-.env-card{ background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px 18px; box-shadow:var(--shadow); }
-.env-card .rank{ font-family:"Big Shoulders Display",sans-serif; font-weight:800; font-size:13px; color:var(--accent); }
-.env-card .matchup{ font-size:18px; font-weight:600; margin-top:2px; }
-.env-card .pitchers{ font-size:13px; color:var(--ink-muted); margin-top:2px; }
-.env-card .park{ font-size:12.5px; color:var(--ink-muted); margin-top:8px; }
-.env-bar-row{ display:flex; align-items:center; gap:10px; margin-top:10px; }
-.env-bar{ flex:1; height:8px; border-radius:5px; background:var(--surface-2); overflow:hidden; }
-.env-bar > i{ display:block; height:100%; background:linear-gradient(90deg,var(--accent-strong),var(--accent)); border-radius:5px; }
-.env-score{ font-size:14px; font-weight:600; width:38px; text-align:right; }
-.env-chips{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
-.chip{ display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; border-radius:20px; padding:4px 10px; border:1px solid var(--border); background:var(--surface-2); color:var(--ink); }
-.chip.wind-out{ color:var(--positive); border-color:var(--positive); background:var(--positive-tint); }
-.chip.wind-in{ color:var(--negative); border-color:var(--negative); background:var(--negative-tint); }
-.hot-list{ background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow); overflow:hidden; }
-.hot-row{ display:grid; grid-template-columns:26px 1.4fr 90px 1fr 60px; align-items:center; gap:14px; padding:11px 18px; border-bottom:1px solid var(--border); }
-.hot-row:last-child{ border-bottom:none; }
-.hot-row .rank{ font-family:"IBM Plex Mono",monospace; color:var(--ink-muted); font-size:13px; }
-.hot-row .name{ font-weight:600; font-size:14.5px; }
-.label-pill{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; border-radius:20px; padding:3px 9px; text-align:center; }
-.label-scorching, .label-ice-cold{ background:var(--negative-tint); color:var(--negative); }
-.label-hot{ background:var(--accent-tint); color:var(--accent-strong); }
-.label-steady, .label-cold{ background:var(--surface-2); color:var(--ink-muted); }
-.heat-bar{ height:7px; border-radius:5px; background:var(--surface-2); overflow:hidden; position:relative; }
-.heat-bar > i{ position:absolute; top:0; bottom:0; background:var(--accent); border-radius:5px; }
-.hot-row .z{ text-align:right; font-size:13.5px; font-weight:600; }
-.table-scroll{ overflow-x:auto; border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow); background:var(--surface); }
-table.props{ border-collapse:collapse; width:100%; min-width:1220px; font-size:13.5px; }
-table.props thead th{ position:sticky; top:0; background:var(--surface-2); text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-muted); padding:10px 12px; border-bottom:1px solid var(--border); font-weight:700; white-space:nowrap; }
-table.props tbody td{ padding:10px 12px; border-bottom:1px solid var(--border); white-space:nowrap; }
-table.props tbody tr:last-child td{ border-bottom:none; }
-table.props tbody tr:hover{ background:var(--surface-2); }
-table.props td.player{ font-weight:600; white-space:normal; }
-table.props td.event{ color:var(--ink-muted); font-size:12.5px; white-space:normal; }
-.tier{ display:inline-block; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; border-radius:5px; padding:2px 6px; margin-top:3px; }
-.tier.agree{ background:var(--positive-tint); color:var(--positive); }
-.tier.model{ background:var(--surface-2); color:var(--ink-muted); }
-.pos{ color:var(--positive); }
-.neg{ color:var(--negative); }
-.book{ text-transform:capitalize; color:var(--ink-muted); font-size:12.5px; }
-.wx-cell{ font-size:12.5px; color:var(--ink-muted); }
-.wx-cell b{ color:var(--ink); font-weight:600; }
-.method-grid{ display:grid; grid-template-columns:1fr 1fr; gap:20px; }
-@media (max-width:760px){ .method-grid{ grid-template-columns:1fr; } }
-.method-card{ background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 20px; box-shadow:var(--shadow); }
-.method-card h3{ font-size:16px; font-weight:700; margin-bottom:10px; }
-.weight-row{ display:flex; align-items:center; gap:10px; font-size:13px; padding:4px 0; }
-.weight-row .wname{ width:150px; color:var(--ink-muted); flex:none; }
-.weight-bar{ flex:1; height:6px; border-radius:4px; background:var(--surface-2); overflow:hidden; }
-.weight-bar > i{ display:block; height:100%; background:var(--accent); }
-.weight-row .wval{ width:34px; text-align:right; font-weight:600; }
-.sources{ display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
-.source-chip{ font-size:12px; border:1px solid var(--border); background:var(--surface-2); color:var(--ink-muted); border-radius:20px; padding:4px 10px; }
-footer{ margin-top:50px; padding-top:20px; border-top:1px solid var(--border); font-size:12.5px; color:var(--ink-muted); }
-footer p{ max-width:80ch; margin:0 0 8px; }
-.empty{ color:var(--ink-muted); font-size:14px; padding:18px; }
-"""
+from .site_style import STYLE as _STYLE
+from .site_style import nav_html
 
 
 def _esc(s: object) -> str:
@@ -194,13 +83,16 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
     clr_cells = f'<td class="num">{_esc(l15)}</td><td class="num">{_esc(szn)}</td>'
     if not e.has_market_data:
         return f"""
-          <tr><td class="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div></td>
-            <td class="event">{_esc(e.event)}</td><td class="num">{_fmt_pct(e.model_prob)}</td>{bp_cell}
+          <tr data-player="{_esc(e.player.lower())}" data-book="" data-tier="no_market" data-prob="{e.model_prob}" data-ev="">
+            <td class="player" data-k="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div></td>
+            <td class="event">{_esc(e.event)}</td><td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>{bp_cell}
             <td colspan="6" class="wx-cell">no book currently quotes this prop</td>{clr_cells}</tr>"""
-    both_agree = e.ev_percent_model is not None and e.ev_percent_model > 0 and e.edge_vs_market is not None and e.edge_vs_market > 0
-    if both_agree:
+    # e.tier (edges.py) is the shared source of truth for this
+    # classification - results.py's pick recording uses the same property,
+    # so a recorded pick's tier always matches what this page showed for it.
+    if e.tier == "agree":
         tier = '<div class="tier agree">Model + market agree</div>'
-    elif e.market_fair_prob is None:
+    elif e.tier == "model_only_single_sided":
         # Real price, but a single-sided market (e.g. an "Over 0.5"-only home
         # run prop with no "Under" leg) - no no-vig consensus to compare
         # against, so this is model-vs-price EV only. See edges.py.
@@ -212,16 +104,16 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
     edge_cell = f"{e.edge_vs_market:+.1%}" if e.edge_vs_market is not None else "n/a"
     ev_market_cell = f"{e.ev_percent_market:+.1f}%" if e.ev_percent_market is not None else "n/a"
     return f"""
-          <tr>
-            <td class="player">{_esc(e.player)}{tier}</td>
+          <tr data-player="{_esc(e.player.lower())}" data-book="{_esc(e.best_line.sportsbook.lower())}" data-tier="{_esc(e.tier)}" data-prob="{e.model_prob}" data-ev="{e.ev_percent_model}">
+            <td class="player" data-k="player">{_esc(e.player)}{tier}</td>
             <td class="event">{_esc(e.event)}</td>
-            <td class="num">{_fmt_pct(e.model_prob)}</td>
+            <td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>
             {bp_cell}
-            <td class="num pos">{e.best_line.odds:+d}</td>
-            <td class="book">{_esc(e.best_line.sportsbook)}</td>
+            <td class="num pos" data-k="price">{e.best_line.odds:+d}</td>
+            <td class="book" data-k="book">{_esc(e.best_line.sportsbook)}</td>
             <td class="num">{_fmt_opt_pct(e.market_fair_prob)}</td>
             <td class="num {'pos' if e.edge_vs_market is not None and e.edge_vs_market >= 0 else 'neg' if e.edge_vs_market is not None else ''}">{edge_cell}</td>
-            <td class="num {'pos' if e.ev_percent_model >= 0 else 'neg'}">{e.ev_percent_model:+.1f}%</td>
+            <td class="num {'pos' if e.ev_percent_model >= 0 else 'neg'}" data-k="ev">{e.ev_percent_model:+.1f}%</td>
             <td class="num {'pos' if e.ev_percent_market is not None and e.ev_percent_market >= 0 else 'neg' if e.ev_percent_market is not None else ''}">{ev_market_cell}</td>
             <td class="num">{e.books_quoting}</td>
             <td class="wx-cell">{wind}, {temp} <b>{e.weather_boost_pct:+.1f}%</b></td>
@@ -241,23 +133,45 @@ def _weight_rows(weights: dict) -> str:
     return "\n".join(rows)
 
 
-def _prop_table(title: str, hint: str, edges: List[EdgeCandidate], prob_header: str, top: int, heat_by_player: Dict[str, HeatIndex], kind: str) -> str:
+def _prop_table(
+    title: str, hint: str, edges: List[EdgeCandidate], prob_header: str, top: int, heat_by_player: Dict[str, HeatIndex], kind: str, table_id: str
+) -> str:
     if not edges:
         return f"""
     <div class="section-head"><h2>{_esc(title)}</h2><span class="hint">{_esc(hint)}</span></div>
     <div class="empty">No candidates scored for this slate.</div>"""
-    rows = "".join(_prop_row(e, heat_by_player.get(e.player), kind) for e in edges[:top])
+    shown = edges[:top]
+    rows = "".join(_prop_row(e, heat_by_player.get(e.player), kind) for e in shown)
+    # Real books actually seen in this table, for the filter dropdown - never
+    # a fixed list (a book with zero real prices tonight shouldn't appear as
+    # a selectable, always-empty filter option).
+    books = sorted({e.best_line.sportsbook for e in shown if e.has_market_data})
+    book_options = "".join(f'<option value="{_esc(b.lower())}">{_esc(b)}</option>' for b in books)
     return f"""
     <div class="section-head"><h2>{_esc(title)}</h2><span class="hint">{_esc(hint)}</span></div>
+    <div class="filter-bar">
+      <input type="search" id="{table_id}-search" placeholder="Search player…">
+      <select id="{table_id}-book"><option value="">All books</option>{book_options}</select>
+      <select id="{table_id}-tier">
+        <option value="">All tiers</option>
+        <option value="agree">Model + market agree</option>
+        <option value="model_only">Model only</option>
+        <option value="model_only_single_sided">Model only (single-sided)</option>
+        <option value="no_market">No market price</option>
+      </select>
+      <span class="filter-count" id="{table_id}-count"></span>
+    </div>
     <div class="table-scroll">
-      <table class="props">
+      <table class="props sortable" id="{table_id}-table">
         <thead><tr>
-          <th>Player</th><th>Matchup</th><th>{_esc(prob_header)}</th><th>BP Model</th><th>Best price</th><th>Book</th>
-          <th>Market fair</th><th>Edge</th><th>EV (model)</th><th>EV (market)</th><th>Books</th><th>Weather</th>
+          <th data-k="player">Player<span class="arrow">▾</span></th><th>Matchup</th>
+          <th data-k="prob">{_esc(prob_header)}<span class="arrow">▾</span></th><th>BP Model</th>
+          <th data-k="price">Best price<span class="arrow">▾</span></th><th data-k="book">Book<span class="arrow">▾</span></th>
+          <th>Market fair</th><th>Edge</th><th data-k="ev">EV (model)<span class="arrow">▾</span></th><th>EV (market)</th><th>Books</th><th>Weather</th>
           <th title="Real games this player actually cleared this line, out of the last 15 games played">L15 clear</th>
           <th title="Same real clearance rate over the full season - the baseline to judge L15 clear against">Season rate</th>
         </tr></thead>
-        <tbody>{rows}
+        <tbody id="{table_id}-tbody">{rows}
         </tbody>
       </table>
     </div>"""
@@ -328,6 +242,7 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
 </head>
 <body>
 <div class="wrap">
+  {nav_html("board")}
   <header class="top">
     <div class="brand-block">
       <div class="brand"><span class="mark">MLB PROPS</span></div>
@@ -370,15 +285,15 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
   </section>
 
   <section class="section">
-    {_prop_table("Best home run props", 'Ranked by our model’s EV% against the best live price - "agree" = model & market both see value', hr, "Model P(HR)", top, heat_by_player, "hr")}
+    {_prop_table("Best home run props", 'Ranked by our model’s EV% against the best live price - "agree" = model & market both see value', hr, "Model P(HR)", top, heat_by_player, "hr", "hr")}
   </section>
 
   <section class="section">
-    {_prop_table("Best 2+ total bases props", "Ranked by our model's EV% against the best live price", tb, "Model P(2+ TB)", top, heat_by_player, "tb2")}
+    {_prop_table("Best 2+ total bases props", "Ranked by our model's EV% against the best live price", tb, "Model P(2+ TB)", top, heat_by_player, "tb2", "tb")}
   </section>
 
   <section class="section">
-    {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price", hits, "Model P(1+ Hits)", top, heat_by_player, "hit")}
+    {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price", hits, "Model P(1+ Hits)", top, heat_by_player, "hit", "hits")}
   </section>
 
   <section class="section">
@@ -409,8 +324,73 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     <p>&middot; <strong>"EV%" means model vs. market, not "market is wrong."</strong> Every EV% figure is our model's probability compared against the book's own no-vig fair price. A positive EV% is our model disagreeing with the market in the bettor's favor, not proof the market is mispriced - the market could just as easily be right and our model wrong. Weigh it as one informed opinion against another, not a guarantee.</p>
     <p>&middot; <strong>Pull-air% is permanently unavailable for the HR score (6% of its weight).</strong> Neither Baseball Savant leaderboard this project pulls carries a pull-rate column, and FanGraphs (which does) returns 403 to every request from this environment's hosting provider. That component defaults to 0 for every player, every run - a real, disclosed gap, not a hidden zero.</p>
     <p>&middot; <strong>"BP Model" (HR/Hits tables, when configured) is Ballpark Pal's own independent model</strong> - a genuine second opinion, not this project's model shown twice. Their real numbers are per-plate-appearance; converted here to a per-game figure via P(at least 1 in ~4.3 PA) so it's comparable to "Model". Agreement is more reassuring than either model alone; disagreement means two different models read the matchup differently, not that one is wrong. "n/a" means not configured or no data for that matchup.</p>
+    <p>Every prop table is sortable (click a column header) and filterable (search/book/tier, above each table). See the <a href="performance.html">Performance</a> page for this model's real track record - past picks resolved against what actually happened, plus closing-line value.</p>
   </footer>
 </div>
+<script>
+(function(){{
+  function initPropTable(id) {{
+    var table = document.getElementById(id + '-table');
+    if (!table) return;
+    var tbody = document.getElementById(id + '-tbody');
+    var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+    var search = document.getElementById(id + '-search');
+    var bookSel = document.getElementById(id + '-book');
+    var tierSel = document.getElementById(id + '-tier');
+    var countEl = document.getElementById(id + '-count');
+    var thead = table.querySelector('thead');
+    var sortKey = null, sortDir = 1;
+
+    function applyFilters() {{
+      var q = search.value.trim().toLowerCase();
+      var book = bookSel.value;
+      var tier = tierSel.value;
+      var visible = 0;
+      rows.forEach(function(row) {{
+        var show = true;
+        if (q && row.dataset.player.indexOf(q) === -1) show = false;
+        if (book && row.dataset.book !== book) show = false;
+        if (tier && row.dataset.tier !== tier) show = false;
+        row.classList.toggle('hidden-row', !show);
+        if (show) visible++;
+      }});
+      countEl.textContent = visible + ' of ' + rows.length + ' shown';
+    }}
+
+    function applySort(key) {{
+      if (sortKey === key) {{ sortDir = -sortDir; }} else {{ sortKey = key; sortDir = 1; }}
+      var numeric = key === 'prob' || key === 'price' || key === 'ev';
+      rows.sort(function(a, b) {{
+        var av, bv;
+        if (numeric) {{
+          av = parseFloat(a.dataset[key]) || 0;
+          bv = parseFloat(b.dataset[key]) || 0;
+        }} else {{
+          av = (a.dataset[key] || '').toLowerCase();
+          bv = (b.dataset[key] || '').toLowerCase();
+        }}
+        if (av < bv) return -1 * sortDir;
+        if (av > bv) return 1 * sortDir;
+        return 0;
+      }});
+      rows.forEach(function(row) {{ tbody.appendChild(row); }});
+      thead.querySelectorAll('th').forEach(function(th) {{
+        th.classList.toggle('sorted', th.getAttribute('data-k') === key);
+      }});
+    }}
+
+    thead.querySelectorAll('th[data-k]').forEach(function(th) {{
+      th.addEventListener('click', function() {{ applySort(th.getAttribute('data-k')); }});
+    }});
+    [search, bookSel, tierSel].forEach(function(el) {{
+      el.addEventListener('input', applyFilters);
+      el.addEventListener('change', applyFilters);
+    }});
+    applyFilters();
+  }}
+  ['hr', 'tb', 'hits'].forEach(initPropTable);
+}})();
+</script>
 </body>
 </html>
 """

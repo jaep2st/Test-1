@@ -22,10 +22,23 @@ name: MLB props report
 #      schedule below keeps it current. The schedule only fires once this
 #      file is on the repo's default branch - trigger it manually from a
 #      feature branch in the meantime.
+#   Nothing else to set up for the real track record/Performance page below -
+#   no new secret, no external database. It just needs `permissions.contents:
+#   write` (already set) so this workflow can commit its own generated
+#   history back to the repo.
 #
 # The published page always reflects the most recent successful run - open
 # it any time for the current slate, or click "Run workflow" for an
 # on-demand refresh.
+#
+# Every run also grows this repo's real track record under data/ (picks/,
+# results/, clv/ - one JSONL file per day, see mlb_props/results.py) and
+# republishes public/performance.html from it (mlb_props/backtest.py +
+# performance_report.py) - the "is this model actually working" dashboard,
+# linked from the main report's nav. The git repo IS the database: a final
+# step below commits any changed data/ files straight back to this
+# workflow's own branch, which is why `permissions.contents` is `write`
+# here (every other permission stays read-only/deploy-only).
 
 on:
   workflow_dispatch:
@@ -61,9 +74,14 @@ on:
         description: "Space-separated player full names (e.g. 'Gunnar Henderson' 'Pete Alonso' - quote each name) to check directly against the real Baseball Savant leaderboard, isolated from the rest of the pipeline. Leave blank to skip. Printed to this job's log, not the published report."
         required: false
         default: ""
+      record_clv:
+        description: "Also snapshot current odds for --date's already-recorded picks to compute closing-line value (mlb_props/results.py's record_closing_odds) - normally only the 2:30 UTC cron does this, run automatically."
+        type: boolean
+        required: false
+        default: false
   schedule:
-    # Twice daily, timed around the US MLB slate (adjust to taste - both
-    # are UTC, since GitHub Actions schedule: doesn't support local time):
+    # Three times daily, timed around the US MLB slate (adjust to taste -
+    # all UTC, since GitHub Actions schedule: doesn't support local time):
     # 15:00 UTC (~11am ET / 8am PT) - after probable pitchers are typically
     # posted, well before first pitch. Good for the day's early model-only
     # read before real odds exist yet.
@@ -72,9 +90,16 @@ on:
     # bulk of evening games start and books have posted real player-prop
     # boards for the day - the highest-market-coverage check of the two.
     - cron: "30 22 * * *"
+    # 2:30 UTC (~10:30pm ET / 7:30pm PT) - after the last first pitches of
+    # a normal slate. Dedicated to snapshotting closing-line value for
+    # today's already-recorded picks (see the "Record closing-line value"
+    # step below) - this is deliberately close to lock, not right at first
+    # pitch, so the "closing" price it records is genuinely close to the
+    # real closing line, not just another mid-day snapshot.
+    - cron: "30 2 * * *"
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -145,6 +170,9 @@ jobs:
             --html-out public/index.html \
             --out public/report.txt \
             --pdf-out public/Longball_Board.pdf \
+            --record-picks \
+            --data-dir data \
+            --performance-out public/performance.html \
             --log-level DEBUG
 
       - name: Upload the PDF as a workflow artifact
@@ -209,9 +237,51 @@ jobs:
           done < <(python3 -c "import shlex, sys; print(chr(10).join(shlex.split(sys.argv[1])))" "$NAME_LOOKUP_INPUT")
           python mlb_props_main.py --name-lookup-check "${NAMES[@]}"
 
+      - name: Resolve yesterday's real outcomes
+        run: |
+          # Every run tries to resolve real outcomes for the previous real
+          # calendar day (America/New_York, matching mlb_props_main.py's
+          # own "today" convention) - by the time any run fires, yesterday's
+          # games are safely final. Never the *current* --date: today's
+          # games (if any already started) aren't done yet. A day with no
+          # picks recorded (this feature's first day, or a quiet slate) is
+          # a real no-op, not an error - see resolve_results_for_date's
+          # docstring in mlb_props/results.py.
+          YESTERDAY=$(TZ=America/New_York date -d "yesterday" +%Y-%m-%d)
+          python mlb_props_main.py --resolve-results --date "$YESTERDAY" --data-dir data
+
+      - name: Record closing-line value
+        # Only the dedicated 2:30 UTC cron does this automatically (see the
+        # `schedule:` comment above) - a manual run can also opt in via the
+        # record_clv input. Not run on every trigger: the whole point of
+        # "closing" is that it's the price right before lock, not another
+        # mid-day snapshot.
+        if: ${{ github.event.schedule == '30 2 * * *' || inputs.record_clv }}
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
+        run: |
+          python mlb_props_main.py --record-clv --date "${{ inputs.date || 'today' }}" --data-dir data
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
+
+      - name: Commit real pick/result/CLV history
+        run: |
+          # The git repo is the database for this project's real track
+          # record (see mlb_props/results.py) - no separate storage needed.
+          # A no-op commit (nothing in data/ actually changed this run,
+          # e.g. a quiet slate with zero picks) is skipped, not forced.
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "No data/ changes this run - nothing to commit."
+          else
+            git commit -m "Record real pick/result/CLV history for $(TZ=America/New_York date +%Y-%m-%d)"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
 
   deploy:
     needs: build
