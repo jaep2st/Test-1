@@ -241,7 +241,12 @@ class LiveValueBet:
     fair_prob: float  # the real, de-vigged multi-book consensus probability - not this project's model
     best_price: int
     best_book: str
-    books_used: int  # how many books' quotes went into the de-vig - always 2+, find_fair_prices requires it
+    books_used: int  # how many books had BOTH sides quoted (used for the de-vig itself) - can be as
+    # low as 1: find_fair_prices only requires one book with a real two-sided price to de-vig its
+    # OWN vig, then shops the best price for that side across every book quoting it (including
+    # single-sided ones, e.g. betrivers' live batter_home_runs "Over"-only pricing). A books_used=1
+    # bet is still real (that book's own no-vig probability vs. a genuinely different book's price),
+    # just a weaker signal than several books independently agreeing - worth weighing accordingly.
     ev_percent: float  # best price's EV vs. the de-vigged consensus
     units: float
 
