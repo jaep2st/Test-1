@@ -145,6 +145,39 @@ tr.hidden-row{ display:none; }
 
 .sample-note{ font-size:13px; color:var(--ink-muted); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:18px; }
 .sample-note b{ color:var(--ink); }
+
+/* --- Recommended Bets --- */
+.reco-group{ margin-bottom:22px; }
+.reco-group:last-child{ margin-bottom:0; }
+.reco-group-head{ display:flex; align-items:baseline; gap:10px; margin-bottom:10px; }
+.reco-group-head h3{ font-size:16px; font-weight:700; }
+.reco-group-head .hint{ font-size:12px; color:var(--ink-muted); }
+.reco-list{ background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow); overflow:hidden; }
+.reco-row{ display:grid; grid-template-columns:1.6fr 1fr .8fr .9fr .7fr 70px; align-items:center; gap:14px; padding:13px 18px; border-bottom:1px solid var(--border); }
+.reco-row:last-child{ border-bottom:none; }
+.reco-row .who{ font-weight:700; font-size:14.5px; }
+.reco-row .bet{ font-size:12.5px; color:var(--ink-muted); margin-top:2px; }
+.reco-row .event{ font-size:12.5px; color:var(--ink-muted); }
+.reco-row .price{ font-size:13.5px; }
+.reco-row .price b{ font-weight:700; }
+.reco-row .prob{ font-size:13px; }
+.reco-row .edge{ font-size:13px; }
+.reco-units{ display:flex; flex-direction:column; align-items:flex-end; }
+.reco-units .n{ font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-weight:700; font-size:17px; color:var(--accent-strong); }
+.reco-units .lbl{ font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-muted); }
+.reco-empty{ padding:16px 18px; color:var(--ink-muted); font-size:13.5px; background:var(--surface); border:1px solid var(--border); border-radius:10px; }
+.reco-disclosure{ font-size:12.5px; color:var(--ink-muted); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin-top:16px; }
+.reco-disclosure b{ color:var(--ink); }
+@media (max-width:760px){
+  .reco-row{ grid-template-columns:1fr 1fr; grid-template-areas:"who units" "bet bet" "event event" "price prob"; row-gap:6px; }
+  .reco-row .who{ grid-area:who; }
+  .reco-units{ grid-area:units; align-items:flex-end; }
+  .reco-row .bet{ grid-area:bet; }
+  .reco-row .event{ grid-area:event; }
+  .reco-row .price{ grid-area:price; }
+  .reco-row .prob{ grid-area:prob; }
+  .reco-row .edge{ display:none; }
+}
 """
 
 

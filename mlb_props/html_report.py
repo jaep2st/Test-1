@@ -12,6 +12,7 @@ import html
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from .betting import RecommendedBet, build_recommended_bets
 from .edges import EdgeCandidate
 from .hot_streak import HeatIndex
 from .pipeline import MatchupEnvironment, SlateReport
@@ -121,6 +122,66 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
           </tr>"""
 
 
+def _reco_row(r: RecommendedBet) -> str:
+    edge_cell = f"{r.edge_vs_market:+.1%}" if r.edge_vs_market is not None else "n/a"
+    return f"""
+      <div class="reco-row">
+        <div><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div></div>
+        <div class="event">{_esc(r.event)}</div>
+        <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}</div>
+        <div class="prob num">{_fmt_pct(r.model_prob)} model</div>
+        <div class="edge num {'pos' if r.edge_vs_market is not None and r.edge_vs_market >= 0 else 'neg' if r.edge_vs_market is not None else ''}">{edge_cell}</div>
+        <div class="reco-units"><div class="n">{r.units:g}u</div><div class="lbl">size</div></div>
+      </div>"""
+
+
+def _reco_group(title: str, hint: str, recs: List[RecommendedBet]) -> str:
+    body = (
+        "".join(_reco_row(r) for r in recs)
+        if recs
+        else '<div class="reco-empty">No real plays cleared the bar here right now.</div>'
+    )
+    list_wrap = f'<div class="reco-list">{body}</div>' if recs else body
+    return f"""
+    <div class="reco-group">
+      <div class="reco-group-head"><h3>{_esc(title)}</h3><span class="hint">{_esc(hint)}</span></div>
+      {list_wrap}
+    </div>"""
+
+
+def _recommended_bets_section(strong: List[RecommendedBet], speculative: List[RecommendedBet]) -> str:
+    strong_html = _reco_group(
+        f"Strong plays ({len(strong)})",
+        "Model + market both see real value - our fundamentals and the market's own cross-book pricing agree",
+        strong,
+    )
+    speculative_html = _reco_group(
+        f"Speculative ({len(speculative)})",
+        "Model only, no market confirmation - real edge by our own numbers, but nothing else backs it up. Sized smaller, treat with more scrutiny",
+        speculative,
+    )
+    return f"""
+  <section class="section" style="margin-top:0;">
+    <div class="section-head">
+      <h2>Tonight's Recommended Bets</h2>
+      <span class="hint">Every real +EV play that clears the bar, sized to a conservative fraction of Kelly</span>
+    </div>
+    {strong_html}
+    {speculative_html}
+    <div class="reco-disclosure">
+      <b>How sizing works:</b> "size" is fractional Kelly - quarter-Kelly (0.25x) for Strong plays, an extra-conservative
+      1/8-Kelly (0.125x) for Speculative ones - expressed in units where <b>1 unit = 1% of your bankroll</b> (this project
+      doesn't know your actual bankroll). Every size is floored at 0.5u and capped at 3u regardless of what the raw math
+      says, so one overconfident number can't recommend an outsized bet.
+      <b>This model's probability is a hand-weighted heuristic (see mlb_props/scoring.py), not a calibrated prediction</b> -
+      real Kelly sizing assumes that number is genuinely accurate, which is exactly what hasn't been proven yet (see the
+      <a href="performance.html">Performance</a> page for the real, growing track record). Treat every size here as a
+      conservative starting point to adjust with your own judgment, never as a guarantee. Never bet more than you can
+      afford to lose.
+    </div>
+  </section>"""
+
+
 def _weight_rows(weights: dict) -> str:
     rows = []
     for name, w in sorted(weights.items(), key=lambda kv: kv[1], reverse=True):
@@ -191,6 +252,7 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     top_hits = next((e for e in hits if e.has_market_data), hits[0] if hits else None)
     best_env = envs[0] if envs else None
     hottest = hot[0] if hot else None
+    strong_recs, speculative_recs = build_recommended_bets(report)
 
     def tile(label: str, value: str, sub: str) -> str:
         return f'<div class="tile"><div class="label">{_esc(label)}</div><div class="value">{_esc(value)}</div><div class="sub">{sub}</div></div>'
@@ -261,7 +323,9 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
     <span class="detail">{status_detail}</span>
   </div>
 
-  <section class="section" style="margin-top:0;">
+  {_recommended_bets_section(strong_recs, speculative_recs)}
+
+  <section class="section">
     <span class="eyebrow">At a glance</span>
     <div class="tiles">
       {''.join(tiles) if tiles else '<div class="empty">Not enough data scored yet.</div>'}
