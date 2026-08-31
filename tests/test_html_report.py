@@ -87,3 +87,44 @@ def test_html_report_escapes_player_names_safely():
     row_html = _prop_row(malicious, None, "hr")
     assert "<script>alert(1)</script>" not in row_html
     assert "&lt;script&gt;" in row_html
+
+
+def test_html_report_shows_recommended_bets_with_real_units():
+    from mlb_props.betting import build_recommended_bets
+
+    report = _report()
+    strong, speculative = build_recommended_bets(report)
+    assert strong  # the mock fixture reliably produces at least one real +EV pick
+    html_text = render_html_report(report)
+    assert "Tonight's Recommended Bets" in html_text
+    assert "Strong plays" in html_text
+    assert f"{strong[0].units:g}u" in html_text
+    assert strong[0].player in html_text
+
+
+def test_html_report_recommended_bets_empty_state_is_honest_not_hidden():
+    from datetime import date as _date
+
+    from mlb_props.pipeline import SlateReport
+
+    empty_report = SlateReport(
+        game_date=_date(2026, 8, 26), slate=[], matchup_environments=[], hot_batters=[],
+        hr_edges=[], tb_edges=[], hits_edges=[],
+    )
+    html_text = render_html_report(empty_report)
+    assert "No real plays cleared the bar" in html_text
+
+
+def test_html_report_escapes_malicious_player_name_in_recommended_bets():
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _reco_row
+
+    malicious = RecommendedBet(
+        player="<script>alert(1)</script>", market="batter_home_runs", market_label="1+ HR",
+        event="Team A @ Team B", tier="agree", model_prob=0.20, market_fair_prob=0.15,
+        edge_vs_market=0.05, ev_percent_model=10.0, best_price=200, best_book="draftkings",
+        books_quoting=2, units=1.0, full_kelly_percent=4.0,
+    )
+    row_html = _reco_row(malicious)
+    assert "<script>alert(1)</script>" not in row_html
+    assert "&lt;script&gt;" in row_html
