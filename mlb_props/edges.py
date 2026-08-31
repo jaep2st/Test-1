@@ -86,6 +86,30 @@ class EdgeCandidate:
         return self.best_line is not None
 
     @property
+    def tier(self) -> str:
+        """Which of the report's four labeled buckets this candidate falls
+        into - shared by html_report.py's row styling and results.py's pick
+        recording (see that module), so a pick's recorded tier always
+        matches what the published report actually showed for it that run.
+        "agree" = model_prob beats the best price AND that price beats the
+        market's own no-vig consensus - the strongest kind of spot. See
+        this module's docstring for the two independent signals.
+        """
+        if not self.has_market_data:
+            return "no_market"
+        both_agree = (
+            self.ev_percent_model is not None
+            and self.ev_percent_model > 0
+            and self.edge_vs_market is not None
+            and self.edge_vs_market > 0
+        )
+        if both_agree:
+            return "agree"
+        if self.market_fair_prob is None:
+            return "model_only_single_sided"
+        return "model_only"
+
+    @property
     def weather_note(self) -> str:
         if self.is_dome:
             return f"{self.park}: roof closed, no wind effect"

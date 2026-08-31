@@ -60,9 +60,11 @@ from mlb_props.hot_streak import HotStreakProvider, MockHotStreakProvider, Statc
 from mlb_props.market import MockMlbPropsOddsProvider, NoOddsProvider
 from mlb_props.matchup import MatchupProvider, MockMatchupProvider, PybaseballMatchupProvider
 from mlb_props.html_report import render_html_report
+from mlb_props.performance_report import render_performance_report
 from mlb_props.pipeline import run_pipeline
 from mlb_props.pdf_report import render_pdf_report
 from mlb_props.report import render_report
+from mlb_props.results import record_closing_odds, record_picks, resolve_results_for_date
 from mlb_props.schedule import MLB_STATS_API_BASE, MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
 from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider, _find_player_row
 
@@ -390,6 +392,36 @@ def run_game_status_check(game_date: date) -> str:
     return "\n".join(out)
 
 
+def run_resolve_results(data_dir: str, game_date: date) -> str:
+    """Standalone diagnostic for `--resolve-results`: resolves `game_date`'s
+    already-recorded picks (`<data_dir>/picks/<date>.jsonl`) against real
+    Baseball Savant per-game logs - see `mlb_props/results.py`'s
+    `resolve_results_for_date`. Only call this once `game_date`'s real
+    games are safely final (the workflow calls it for the *previous* day,
+    never today's).
+    """
+    try:
+        import pybaseball as pyb  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError("pybaseball is required. Install with `pip install pybaseball pandas`.") from exc
+    picks_path = os.path.join(data_dir, "picks", f"{game_date.isoformat()}.jsonl")
+    out_path = os.path.join(data_dir, "results", f"{game_date.isoformat()}.jsonl")
+    n = resolve_results_for_date(pyb, picks_path, out_path, game_date)
+    return f"Resolved {n} real outcome(s) for {game_date.isoformat()}: {picks_path} -> {out_path}"
+
+
+def run_record_clv(odds: OddsProvider, data_dir: str, game_date: date) -> str:
+    """Standalone diagnostic for `--record-clv`: fetches current odds and
+    records closing-line value for `game_date`'s already-recorded picks -
+    see `mlb_props/results.py`'s `record_closing_odds`.
+    """
+    picks_path = os.path.join(data_dir, "picks", f"{game_date.isoformat()}.jsonl")
+    out_path = os.path.join(data_dir, "clv", f"{game_date.isoformat()}.jsonl")
+    odds_lines = odds.fetch_player_props("mlb")
+    n = record_closing_odds(picks_path, odds_lines, out_path)
+    return f"Recorded closing-line value for {n} pick(s) on {game_date.isoformat()}: {picks_path} -> {out_path}"
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Find +EV MLB home run, 2+ total bases, and 1+ hits props using Statcast quality-of-contact, "
@@ -471,6 +503,42 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "on their own: does the Savant name lookup succeed or fail for this exact name, right now? Requires "
         "--batters (repeatable) and --year.",
     )
+    parser.add_argument(
+        "--data-dir",
+        default="data",
+        help="Root directory for this project's permanent real-pick/result/CLV history (see mlb_props/"
+        "results.py and mlb_props/backtest.py): <data-dir>/picks/<date>.jsonl, <data-dir>/results/<date>.jsonl, "
+        "<data-dir>/clv/<date>.jsonl. Default: 'data'.",
+    )
+    parser.add_argument(
+        "--record-picks",
+        action="store_true",
+        help="Also append every scored candidate this run to <data-dir>/picks/<date>.jsonl - the permanent "
+        "record mlb_props/backtest.py reads to compute the Performance dashboard. Safe to run more than once "
+        "per day (see PickRecord.recorded_at's docstring in results.py).",
+    )
+    parser.add_argument(
+        "--performance-out",
+        default=None,
+        help="Also render the Performance dashboard (real calibration/CLV/hit-rate history, computed from "
+        "<data-dir> - see mlb_props/performance_report.py) to this file.",
+    )
+    parser.add_argument(
+        "--resolve-results",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead resolve --date's already-recorded "
+        "picks (<data-dir>/picks/<date>.jsonl) against what actually happened, via a real Baseball Savant "
+        "per-game log for each picked player - see mlb_props/results.py. Writes <data-dir>/results/<date>.jsonl. "
+        "Only call this once --date's real games are safely final; requires `pip install pybaseball pandas`.",
+    )
+    parser.add_argument(
+        "--record-clv",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead snapshot current odds for --date's "
+        "already-recorded picks (<data-dir>/picks/<date>.jsonl) to compute closing-line value - see "
+        "mlb_props/results.py. Writes <data-dir>/clv/<date>.jsonl. Requires --odds-api-key/ODDS_API_KEY (or "
+        "--api-key/BETSTAMP_API_KEY, or --mock).",
+    )
     return parser.parse_args(argv)
 
 
@@ -529,6 +597,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             logger.info("Wrote live odds scan to %s", args.out)
         return 0
 
+    if args.resolve_results:
+        try:
+            text = run_resolve_results(args.data_dir, args.game_date)
+        except RuntimeError as exc:
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            return 2
+        print(text)
+        return 0
+
+    if args.record_clv:
+        try:
+            _schedule, _statcast, _matchup, _hot_streak, _park_weather, odds, _ballparkpal = build_providers(args)
+        except ValueError as exc:
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            return 2
+        text = run_record_clv(odds, args.data_dir, args.game_date)
+        print(text)
+        return 0
+
     try:
         schedule, statcast, matchup, hot_streak, park_weather, odds, ballparkpal = build_providers(args)
     except ValueError as exc:
@@ -572,6 +659,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             logger.warning("Skipped PDF report: %s", exc)
         else:
             logger.info("Wrote PDF report to %s", args.pdf_out)
+    if args.record_picks:
+        picks_path = os.path.join(args.data_dir, "picks", f"{args.game_date.isoformat()}.jsonl")
+        n = record_picks(report, picks_path)
+        logger.info("Recorded %d pick(s) to %s", n, picks_path)
+    if args.performance_out:
+        perf_html = render_performance_report(args.data_dir)
+        with open(args.performance_out, "w") as f:
+            f.write(perf_html)
+        logger.info("Wrote performance report to %s", args.performance_out)
     return 0
 
 

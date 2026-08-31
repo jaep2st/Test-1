@@ -56,8 +56,34 @@ def test_html_report_includes_every_hr_and_tb_pick():
 
 
 def test_html_report_escapes_player_names_safely():
-    report = _report()
-    # Sanity: report always renders without raising even if a name had markup-like
-    # characters (none do in the mock data, but escaping must run regardless).
-    html_text = render_html_report(report)
-    assert "<script>" not in html_text
+    # A player name with markup-like characters must render escaped, not as
+    # literal injected HTML. Checked directly against a crafted candidate
+    # (rather than asserting no "<script>" appears anywhere on the page) -
+    # the page now ships its own legitimate inline <script> for the
+    # sort/filter/search controls, so that blanket assertion no longer
+    # distinguishes "safely escaped" from "a real feature".
+    from mlb_props.edges import EdgeCandidate
+    from mlb_props.html_report import _prop_row
+
+    malicious = EdgeCandidate(
+        player="<script>alert(1)</script>",
+        market="batter_home_runs",
+        event="Team A @ Team B",
+        model_score=50.0,
+        model_prob=0.12,
+        market_fair_prob=None,
+        best_line=None,
+        ev_percent_model=None,
+        ev_percent_market=None,
+        edge_vs_market=None,
+        price_spread_percent=None,
+        books_quoting=0,
+        park="Test Park",
+        wind_out_mph=0.0,
+        temp_f=70.0,
+        is_dome=False,
+        weather_boost_pct=0.0,
+    )
+    row_html = _prop_row(malicious, None, "hr")
+    assert "<script>alert(1)</script>" not in row_html
+    assert "&lt;script&gt;" in row_html
