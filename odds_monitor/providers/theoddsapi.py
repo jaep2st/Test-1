@@ -256,6 +256,17 @@ class TheOddsApiProvider(OddsProvider):
         bookmakers = (payload or {}).get("bookmakers", []) or []
         if not bookmakers:
             logger.debug("%s: no bookmakers in response yet (empty bookmakers list)", event_label)
+        # Logged unconditionally, BEFORE the --books filter below drops
+        # anything - confirmed live (2026-08-31) that a user-reported "book X
+        # has this market live right now" mismatch against this report is
+        # otherwise unanswerable from the logs: every per-market debug line
+        # below only fires for a bookmaker that already passed the filter,
+        # so a book The Odds API's response spells differently than expected
+        # (or genuinely omits) looks identical to one silently dropped by a
+        # filter typo - this line is the only way to tell "not in the raw
+        # response at all" from "filtered out" after the fact.
+        raw_book_keys = sorted({str(b.get("key", "")).lower() for b in bookmakers})
+        logger.info("%s: raw bookmaker keys in response (before --books filter)=%s", event_label, raw_book_keys)
         for bookmaker in bookmakers:
             book_key = str(bookmaker.get("key", "")).lower()
             if self.books and book_key not in self.books:
