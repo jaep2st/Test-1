@@ -85,14 +85,16 @@ on:
     # ET) and its latest West Coast night games (~10:10pm ET) - and around
     # The Odds API's real cost model: each odds call costs `markets x
     # regions` credits PER STILL-PREGAME GAME at that moment (3 markets x
-    # 1 region = 3 credits/game here - see odds_monitor/providers/
-    # theoddsapi.py), never a flat per-run cost. A full ~15-game slate
-    # costs up to ~45 credits per run that catches it pregame; this
-    # schedule's four checks land at roughly ~90-135 credits/day combined
-    # (~2,700-4,000/month) - cheap relative to a real paid-tier budget
-    # (adjust cadence down only if your actual plan is closer to the
-    # 500-credit/month free tier). All times below are UTC, since GitHub
-    # Actions schedule: doesn't support local time.
+    # 2 regions = 6 credits/game here - regions defaults to "us,us2", not
+    # just "us", because ESPN Bet's real odds live under "us2" - see
+    # odds_monitor/providers/theoddsapi.py), never a flat per-run cost. A
+    # full ~15-game slate costs up to ~90 credits per run that catches it
+    # pregame; this schedule's four checks land at roughly ~180-270
+    # credits/day combined (~5,400-8,100/month) - still comfortably cheap
+    # relative to a real paid-tier budget (adjust cadence/regions down
+    # only if your actual plan is closer to the 500-credit/month free
+    # tier). All times below are UTC, since GitHub Actions schedule:
+    # doesn't support local time.
     #
     # 15:00 UTC (~11am ET / 8am PT) - after probable pitchers are typically
     # posted, well before first pitch. Good for the day's early model-only
