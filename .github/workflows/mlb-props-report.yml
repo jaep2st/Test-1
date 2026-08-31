@@ -80,22 +80,46 @@ on:
         required: false
         default: false
   schedule:
-    # Three times daily, timed around the US MLB slate (adjust to taste -
-    # all UTC, since GitHub Actions schedule: doesn't support local time):
+    # Four times daily, timed around the real US MLB slate - both its
+    # earliest getaway/Sunday day games (first pitch as early as ~12:35pm
+    # ET) and its latest West Coast night games (~10:10pm ET) - and around
+    # The Odds API's real cost model: each odds call costs `markets x
+    # regions` credits PER STILL-PREGAME GAME at that moment (3 markets x
+    # 1 region = 3 credits/game here - see odds_monitor/providers/
+    # theoddsapi.py), never a flat per-run cost. A full ~15-game slate
+    # costs up to ~45 credits per run that catches it pregame; this
+    # schedule's four checks land at roughly ~90-135 credits/day combined
+    # (~2,700-4,000/month) - cheap relative to a real paid-tier budget
+    # (adjust cadence down only if your actual plan is closer to the
+    # 500-credit/month free tier). All times below are UTC, since GitHub
+    # Actions schedule: doesn't support local time.
+    #
     # 15:00 UTC (~11am ET / 8am PT) - after probable pitchers are typically
     # posted, well before first pitch. Good for the day's early model-only
-    # read before real odds exist yet.
+    # read before real odds exist yet for most games.
     - cron: "0 15 * * *"
+    # 16:00 UTC (~12:00pm ET / 9am PT) - added specifically to catch that
+    # day's early/day games, which the 11am and 6:30pm checks both
+    # structurally miss: too early at 11am (odds for most games, day games
+    # included, typically aren't posted yet), and by 6:30pm any day game
+    # has already started or finished, so the pregame safety net
+    # (_filter_lines_to_confirmed_pregame_games) correctly drops its real
+    # odds rather than showing stale/live prices. Timed right before the
+    # earliest realistic first pitch (~12:35pm ET) to give books the most
+    # possible time to have posted lines for that day's early games while
+    # still catching them pregame.
+    - cron: "0 16 * * *"
     # 22:30 UTC (~6:30pm ET / 3:30pm PT) - mid-slate, right around when the
     # bulk of evening games start and books have posted real player-prop
-    # boards for the day - the highest-market-coverage check of the two.
+    # boards for the day - the highest-market-coverage check of the four.
     - cron: "30 22 * * *"
     # 2:30 UTC (~10:30pm ET / 7:30pm PT) - after the last first pitches of
-    # a normal slate. Dedicated to snapshotting closing-line value for
-    # today's already-recorded picks (see the "Record closing-line value"
-    # step below) - this is deliberately close to lock, not right at first
-    # pitch, so the "closing" price it records is genuinely close to the
-    # real closing line, not just another mid-day snapshot.
+    # a normal slate, including the latest West Coast games. Dedicated to
+    # snapshotting closing-line value for today's already-recorded picks
+    # (see the "Record closing-line value" step below) - this is
+    # deliberately close to lock, not right at first pitch, so the
+    # "closing" price it records is genuinely close to the real closing
+    # line, not just another mid-day snapshot.
     - cron: "30 2 * * *"
 
 permissions:
