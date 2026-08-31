@@ -51,6 +51,23 @@ def _provider(responses):
     return TheOddsApiProvider(api_key="test-key", session=_FakeSession(responses))
 
 
+def test_default_regions_include_us2_where_espn_bet_actually_lives():
+    # Real bug, confirmed live (2026-08-31) against The Odds API's own
+    # bookmaker-apis docs: ESPN Bet ("espnbet"/theScore Bet) is grouped
+    # under region "us2", not "us". Requesting only regions="us" (the old
+    # default) silently excluded its real odds from every request - not a
+    # --books filtering issue, the region parameter itself never asked
+    # for that book's data at all. See TheOddsApiProvider's docstring.
+    events_payload = [{"id": "evt1", "home_team": "A", "away_team": "B"}]
+    session = _FakeSession({"/events": events_payload, "/evt1/odds": {"bookmakers": []}})
+    provider = TheOddsApiProvider(api_key="test-key", session=session)
+
+    provider.fetch_player_props("mlb")
+
+    odds_call = next(params for url, params in session.requested_params if url.endswith("/evt1/odds"))
+    assert odds_call["regions"] == "us,us2"
+
+
 def test_parses_home_run_and_total_bases_outcomes():
     events_payload = [{"id": "evt1", "home_team": "New York Yankees", "away_team": "Houston Astros"}]
     odds_payload = {

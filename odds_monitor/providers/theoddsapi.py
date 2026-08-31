@@ -12,9 +12,21 @@ Two calls per league fetch:
    actual player-prop odds. This one costs credits (roughly
    `markets_requested x regions_requested` per call per their pricing docs),
    so this provider deliberately requests only the three markets this
-   pipeline uses (home runs, total bases, hits) and a single region ("us")
-   to keep a full MLB slate (~15 games/day) affordable even on a modest
-   paid plan.
+   pipeline uses (home runs, total bases, hits).
+
+   Regions default to "us,us2" (two region groups, not one) - confirmed
+   live (2026-08-31) against The Odds API's own bookmaker-apis docs page
+   that its own region grouping splits US books across two separate
+   groups: "us" covers draftkings/fanduel/betmgm/betrivers/etc., but
+   "us2" covers a distinct second set that includes `espnbet` (theScore
+   Bet, formerly ESPN Bet). Requesting only "us" (this provider's
+   original default) silently excluded ESPN Bet's real odds from every
+   single request - not a filtering bug (--books already included
+   "espnbet"), the region parameter itself never asked for that book's
+   data in the first place. This roughly doubles the per-event credit
+   cost (2 regions x 3 markets = 6 credits/game instead of 3) - still
+   affordable on a real paid plan; see the workflow's schedule comments
+   for the updated cost estimate.
 
 NOTE ON FIELD NAMES: this is written against the schema documented at
 https://the-odds-api.com/liveapi/guides/v4/#get-event-odds - each
@@ -108,7 +120,7 @@ class TheOddsApiProvider(OddsProvider):
         self,
         api_key: Optional[str] = None,
         base_url: str = DEFAULT_BASE_URL,
-        regions: str = "us",
+        regions: str = "us,us2",
         books: Optional[List[str]] = None,
         timeout: float = 15.0,
         session: Optional[requests.Session] = None,
