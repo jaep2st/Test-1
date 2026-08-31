@@ -12,7 +12,7 @@ import html
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from .betting import RecommendedBet, build_recommended_bets
+from .betting import LiveValueBet, RecommendedBet, build_recommended_bets
 from .edges import EdgeCandidate
 from .hot_streak import HeatIndex
 from .pipeline import MatchupEnvironment, SlateReport
@@ -182,6 +182,45 @@ def _recommended_bets_section(strong: List[RecommendedBet], speculative: List[Re
   </section>"""
 
 
+def _live_row(b: LiveValueBet) -> str:
+    return f"""
+      <div class="reco-row">
+        <div><div class="who">{_esc(b.player)}</div><div class="bet">{_esc(b.market_label)}</div></div>
+        <div class="event">{_esc(b.event)}</div>
+        <div class="price num"><b class="pos">{b.best_price:+d}</b> {_esc(b.best_book)}</div>
+        <div class="prob num">{_fmt_pct(b.fair_prob)} mkt</div>
+        <div class="edge num pos">{b.ev_percent:+.1f}%</div>
+        <div class="reco-units"><div class="n">{b.units:g}u</div><div class="lbl">size</div></div>
+      </div>"""
+
+
+def _live_bets_section(live_bets: List[LiveValueBet]) -> str:
+    body = (
+        "".join(_live_row(b) for b in live_bets)
+        if live_bets
+        else '<div class="reco-empty">No real live cross-book value right now - check back once more games are underway.</div>'
+    )
+    list_wrap = f'<div class="reco-list">{body}</div>' if live_bets else body
+    return f"""
+  <section class="section">
+    <div class="section-head">
+      <h2>Live Right Now ({len(live_bets)})</h2>
+      <span class="hint">Already-started games only - real cross-book value, not this model's own score</span>
+    </div>
+    {list_wrap}
+    <div class="reco-disclosure">
+      <b>This is a different kind of signal than the recommendations above.</b> This project's own model has no
+      live-game-state awareness at all (no tracking of a batter's plate appearances remaining today), so a live bet is
+      never sized off this model's probability - there isn't one to use. "mkt" here is the real, de-vigged consensus
+      probability across the books quoting both sides of this exact live line right now, and "size" is an extra-
+      conservative 1/8-Kelly against that consensus (same units convention as above). The real risk with a live price
+      is less about that consensus being wrong and more about <b>timing</b>: a live line can reprice or disappear
+      within seconds, so a real edge here might already be gone by the time you'd act on it. Verify the price is still
+      live on your book before betting it.
+    </div>
+  </section>"""
+
+
 def _weight_rows(weights: dict) -> str:
     rows = []
     for name, w in sorted(weights.items(), key=lambda kv: kv[1], reverse=True):
@@ -238,7 +277,13 @@ def _prop_table(
     </div>"""
 
 
-def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False, generated_at: Optional[datetime] = None) -> str:
+def render_html_report(
+    report: SlateReport,
+    top: int = 15,
+    is_mock: bool = False,
+    generated_at: Optional[datetime] = None,
+    live_bets: Optional[List[LiveValueBet]] = None,
+) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
     envs = report.matchup_environments
     hot = report.hot_batters
@@ -324,6 +369,8 @@ def render_html_report(report: SlateReport, top: int = 15, is_mock: bool = False
   </div>
 
   {_recommended_bets_section(strong_recs, speculative_recs)}
+
+  {_live_bets_section(live_bets or [])}
 
   <section class="section">
     <span class="eyebrow">At a glance</span>

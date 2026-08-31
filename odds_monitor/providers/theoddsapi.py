@@ -149,13 +149,34 @@ class TheOddsApiProvider(OddsProvider):
         # injected, so tests supplying a fake session are unaffected.
         self.session = session or build_retrying_session()
 
-    def fetch_player_props(self, league: str, include_live: bool = False) -> List[PropLine]:
+    def fetch_player_props(self, league: str, include_live: bool = False, only_live: bool = False) -> List[PropLine]:
         """`include_live=True` fetches already-started games too (tagged
         `PropLine.is_live=True`) instead of skipping them - see this
         module's docstring for why the default (False) excludes them from
         the normal pipeline. Intended for a standalone live-odds scan (see
         `mlb_props_main.py`'s `--live-odds-scan`), never for the main
         model-comparison report.
+
+        `only_live=True` is the mirror image: fetch ONLY already-started
+        games, skipping pregame ones entirely (implies include_live).
+        Exists so a caller that already fetched pregame odds in a separate
+        call (the main report does exactly this) can fetch just the
+        live games without re-paying the per-event credit cost for
+        pregame games it already has - see mlb_props_main.py's
+        live-value-bets wiring, which does exactly this.
+
+        Known real cost inefficiency, not yet worth fixing: `is_live` here
+        is purely `commence_time <= now` - a Final game still counts as
+        "live" by this check (there's no real completed/in-progress
+        distinction available from this endpoint's event list, only MLB's
+        own Stats API has that - see schedule.py's `status` field and
+        pipeline.py's `_filter_lines_to_confirmed_pregame_games`, which
+        cross-checks against it for a different purpose). A late-in-the-
+        day only_live fetch will pay full credit cost requesting odds for
+        games that are actually over and correctly return nothing useful
+        for them - real waste, but not a correctness bug (an empty result
+        for a Final game is still the right result). Revisit with a real
+        MLB-status cross-check if this becomes a real budget problem.
         """
         sport_key = _SPORT_KEYS.get(league.lower())
         if sport_key is None:
@@ -201,7 +222,9 @@ class TheOddsApiProvider(OddsProvider):
                     is_live = starts_at <= now
                 except ValueError:
                     logger.warning("Could not parse commence_time %r for %s - fetching odds anyway", commence_time, event_label)
-            if is_live and not include_live:
+            if only_live and not is_live:
+                continue
+            if is_live and not include_live and not only_live:
                 skipped_live += 1
                 logger.info(
                     "Skipping odds for %s - already started at %s (live in-game prices aren't "
