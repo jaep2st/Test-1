@@ -89,12 +89,18 @@ on:
     # just "us", because ESPN Bet's real odds live under "us2" - see
     # odds_monitor/providers/theoddsapi.py), never a flat per-run cost. A
     # full ~15-game slate costs up to ~90 credits per run that catches it
-    # pregame; this schedule's four checks land at roughly ~180-270
-    # credits/day combined (~5,400-8,100/month) - still comfortably cheap
-    # relative to a real paid-tier budget (adjust cadence/regions down
-    # only if your actual plan is closer to the 500-credit/month free
-    # tier). All times below are UTC, since GitHub Actions schedule:
-    # doesn't support local time.
+    # pregame. On top of that, every run also does a second, separate
+    # only_live=True fetch for the "Live Right Now" section (see
+    # mlb_props/betting.py's build_live_value_bets and
+    # mlb_props_main.py's run_live_value_scan) - up to another ~90 credits
+    # at the runs where most/all of the day's games have already started
+    # (mainly the 6:30pm/10:30pm ET checks; negligible at 11am/12pm ET
+    # when nothing has started yet). Combined, this schedule lands at
+    # roughly ~270-450 credits/day worst case (~8,100-13,500/month) -
+    # still comfortably inside a real paid-tier budget, but adjust
+    # cadence/regions down if your actual plan is closer to the
+    # 500-credit/month free tier. All times below are UTC, since GitHub
+    # Actions schedule: doesn't support local time.
     #
     # 15:00 UTC (~11am ET / 8am PT) - after probable pitchers are typically
     # posted, well before first pitch. Good for the day's early model-only

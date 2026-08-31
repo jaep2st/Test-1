@@ -31,6 +31,12 @@ TOTAL_BASES_LINE_FOR_2PLUS = 1.5
 HOME_RUN_LINE_FOR_1PLUS = 0.5  # the standard "hits a HR" line, as opposed to a longer-shot "2+ HRs" (1.5) etc.
 HITS_LINE_FOR_1PLUS = 0.5  # the standard "gets a hit" line, as opposed to a longer-shot "2+ hits" (1.5) etc.
 
+# The recommended/scored side for each market this project ever bets on -
+# shared by results.py (matching a recorded pick's price against a fresh
+# odds fetch for CLV) and betting.py (finding real cross-book value for
+# live lines). This project never scores or recommends the other side.
+RECOMMENDED_SIDE_FOR_MARKET = {MARKET_HOME_RUN: "yes", MARKET_TOTAL_BASES: "over", MARKET_HITS: "over"}
+
 _BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "espnbet", "fanatics"]
 
 

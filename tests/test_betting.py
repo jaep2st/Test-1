@@ -6,8 +6,10 @@ recommendations. See that module's docstring for the conservatism choices
 
 from mlb_props.betting import (
     MAX_UNITS,
+    MIN_EV_PERCENT_FOR_LIVE,
     MIN_EV_PERCENT_TO_RECOMMEND,
     MIN_UNITS,
+    build_live_value_bets,
     build_recommended_bets,
     kelly_fraction,
     recommend_units,
@@ -147,3 +149,65 @@ def test_build_recommended_bets_combines_all_three_markets():
     hits = _agree_edge("Player I", "batter_hits")
     strong, _ = build_recommended_bets(_report(hr_edges=[hr], tb_edges=[tb], hits_edges=[hits]))
     assert {r.player for r in strong} == {"Player G", "Player H", "Player I"}
+
+
+def _live_line(player, side, price, book, market="batter_home_runs", event="Team X @ Team Y", is_live=True):
+    return PropLine(player=player, team=None, league="mlb", market=market, side=side, line=0.5, odds=price, sportsbook=book, event=event, is_live=is_live)
+
+
+def test_build_live_value_bets_finds_real_cross_book_value():
+    lines = [
+        _live_line("Player A", "yes", 900, "draftkings"),
+        _live_line("Player A", "no", -900, "draftkings"),
+        _live_line("Player A", "yes", 650, "betmgm"),
+        _live_line("Player A", "no", -1200, "betmgm"),
+    ]
+    bets = build_live_value_bets(lines)
+    assert len(bets) == 1
+    assert bets[0].player == "Player A"
+    assert bets[0].best_price == 900
+    assert bets[0].best_book == "draftkings"
+    assert bets[0].ev_percent >= MIN_EV_PERCENT_FOR_LIVE
+    assert bets[0].units >= MIN_UNITS
+
+
+def test_build_live_value_bets_ignores_pregame_lines():
+    lines = [
+        _live_line("Player A", "yes", 900, "draftkings", is_live=False),
+        _live_line("Player A", "no", -900, "draftkings", is_live=False),
+    ]
+    assert build_live_value_bets(lines) == []
+
+
+def test_build_live_value_bets_ignores_single_book_lines_with_no_way_to_devig():
+    lines = [_live_line("Player A", "yes", 900, "draftkings")]
+    assert build_live_value_bets(lines) == []
+
+
+def test_build_live_value_bets_excludes_edges_below_the_higher_live_bar():
+    # A small, real edge that would clear the pregame 3% bar but not the
+    # higher 5% live-specific one.
+    lines = [
+        _live_line("Player A", "yes", 150, "draftkings"),
+        _live_line("Player A", "no", -155, "draftkings"),
+        _live_line("Player A", "yes", 145, "betmgm"),
+        _live_line("Player A", "no", -150, "betmgm"),
+    ]
+    bets = build_live_value_bets(lines)
+    assert all(b.ev_percent >= MIN_EV_PERCENT_FOR_LIVE for b in bets)
+
+
+def test_build_live_value_bets_sorted_by_ev_descending():
+    lines = [
+        _live_line("Player A", "yes", 900, "draftkings", event="Game 1"),
+        _live_line("Player A", "no", -900, "draftkings", event="Game 1"),
+        _live_line("Player A", "yes", 650, "betmgm", event="Game 1"),
+        _live_line("Player A", "no", -1200, "betmgm", event="Game 1"),
+        _live_line("Player B", "yes", 400, "draftkings", event="Game 2"),
+        _live_line("Player B", "no", -500, "draftkings", event="Game 2"),
+        _live_line("Player B", "yes", 250, "betmgm", event="Game 2"),
+        _live_line("Player B", "no", -700, "betmgm", event="Game 2"),
+    ]
+    bets = build_live_value_bets(lines)
+    assert len(bets) == 2
+    assert bets[0].ev_percent >= bets[1].ev_percent

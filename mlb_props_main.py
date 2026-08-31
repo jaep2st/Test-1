@@ -48,6 +48,7 @@ from odds_monitor.providers.betstamp import BetstampProvider
 from odds_monitor.providers.fallback import FallbackOddsProvider
 from odds_monitor.providers.theoddsapi import TheOddsApiProvider
 
+from mlb_props.betting import build_live_value_bets
 from mlb_props.ballparkpal import (
     BALLPARKPAL_API_BASE,
     BallparkPalProvider,
@@ -166,6 +167,21 @@ def build_providers(args: argparse.Namespace):
         # runs simply won't have this key configured.
         ballparkpal = NoBallparkPalProvider()
     return schedule, statcast, matchup, hot_streak, park_weather, odds, ballparkpal
+
+
+def run_live_value_scan(odds_api_key: str, books: Optional[List[str]]) -> list:
+    """Fetches already-started games' odds (only_live=True - a dedicated,
+    separate fetch from the main pregame pipeline's own, so pregame games
+    already fetched there aren't paid for twice) and returns real
+    cross-book value bets built from them - see betting.py's
+    `build_live_value_bets` for the actual math/thresholds. Extracted as
+    its own function (mirroring `run_live_odds_scan` below) so the wiring
+    into the published report is unit-testable without going through the
+    full real pipeline in `main()`.
+    """
+    provider = TheOddsApiProvider(api_key=odds_api_key, books=books)
+    live_lines = provider.fetch_player_props("mlb", only_live=True)
+    return build_live_value_bets(live_lines)
 
 
 def run_live_odds_scan(odds_api_key: str, books: Optional[List[str]]) -> str:
@@ -637,13 +653,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     text = render_report(report, top=args.top)
 
+    # Real cross-book value on already-started games, separate from the
+    # main pregame pipeline above (which only ever fetches pregame odds -
+    # see theoddsapi.py's module docstring). Uses The Odds API directly,
+    # same posture as --live-odds-scan: never fails the run if it's
+    # unavailable (--mock, Betstamp-only, no key configured at all) - the
+    # HTML report's Live section just shows its honest empty state.
+    live_bets: List = []
+    odds_api_key = args.odds_api_key or os.environ.get("ODDS_API_KEY")
+    if not args.mock and odds_api_key:
+        try:
+            live_bets = run_live_value_scan(odds_api_key, args.books)
+        except Exception:
+            logger.warning("Skipped live cross-book value scan (see traceback)", exc_info=True)
+
     print(text)
     if args.out:
         with open(args.out, "w") as f:
             f.write(text + "\n")
         logger.info("Wrote report to %s", args.out)
     if args.html_out:
-        html_text = render_html_report(report, top=args.top, is_mock=args.mock)
+        html_text = render_html_report(report, top=args.top, is_mock=args.mock, live_bets=live_bets)
         with open(args.html_out, "w") as f:
             f.write(html_text)
         logger.info("Wrote HTML report to %s", args.html_out)

@@ -38,15 +38,10 @@ from .edges import EdgeCandidate
 from .hot_streak import game_outcomes_from_events
 from ._ids import lookup_mlbam_id
 from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
+from .market import RECOMMENDED_SIDE_FOR_MARKET as _SIDE_FOR_MARKET
 from .pipeline import SlateReport
 
 logger = logging.getLogger(__name__)
-
-# The recommended side for each market this project ever scores - see
-# market.py's *_LINE_FOR_1PLUS/2PLUS constants. Used to match a recorded
-# pick's price against the matching side of a fresh odds fetch (for CLV);
-# this project never records a pick for the other side.
-_SIDE_FOR_MARKET = {MARKET_HOME_RUN: "yes", MARKET_TOTAL_BASES: "over", MARKET_HITS: "over"}
 
 
 @dataclass(frozen=True)

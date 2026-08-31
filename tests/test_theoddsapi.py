@@ -274,6 +274,42 @@ def test_already_started_events_are_skipped_entirely():
     assert lines[0].player == "Player X"
 
 
+def test_only_live_fetches_started_games_and_skips_pregame_ones():
+    # Mirror image of test_already_started_events_are_skipped_entirely:
+    # only_live=True should request odds ONLY for the started game, never
+    # re-paying for the pregame one a separate earlier call already fetched.
+    import datetime as dt
+
+    past = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    events_payload = [
+        {"id": "live_evt", "home_team": "A", "away_team": "B", "commence_time": past},
+        {"id": "upcoming_evt", "home_team": "C", "away_team": "D", "commence_time": future},
+    ]
+    odds_payload = {
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "batter_home_runs",
+                        "outcomes": [{"name": "Yes", "description": "Player X", "price": 300}],
+                    }
+                ],
+            }
+        ]
+    }
+    provider = _provider({"/events": events_payload, "/live_evt/odds": odds_payload})
+
+    lines = provider.fetch_player_props("mlb", only_live=True)
+
+    requested_paths = [url for url, _ in provider.session.requested_params]
+    assert any("live_evt" in p for p in requested_paths)
+    assert not any("upcoming_evt" in p for p in requested_paths)
+    assert len(lines) == 1
+    assert lines[0].is_live is True
+
+
 def test_all_events_already_started_returns_empty_without_raising():
     # Every game live is not a systemic failure (no requests even attempted,
     # let alone failed) - distinct from OddsFetchFailed's "every request we
