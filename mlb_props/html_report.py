@@ -18,7 +18,7 @@ from .edges import EdgeCandidate
 from .hot_streak import HeatIndex
 from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
 from .pipeline import MatchupEnvironment, SlateReport
-from .report import clearance_cols, heat_lookup
+from .report import clearance_cols, clearance_rates, heat_lookup
 from .scoring import HITS_WEIGHTS, HR_WEIGHTS, TB_WEIGHTS
 from .site_style import STYLE as _STYLE
 from .site_style import nav_html
@@ -258,12 +258,20 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str, all_props_
     bp_cell = f'<td class="num">{_fmt_opt_pct(e.bp_model_prob)}</td>'
     # clearance_cols (from report.py, shared with the console report so the
     # two never drift): (L15 literal count, season rate) - see its
-    # docstring for why L5/L10 aren't shown here either.
+    # docstring for why L5/L10 aren't shown here either. clearance_rates is
+    # the same real numbers as raw 0-1 floats, for the sort columns below -
+    # never guessed when clearance_cols itself would show "n/a".
     l15, szn = clearance_cols(heat, kind)
-    clr_cells = f'<td class="num">{_esc(l15)}</td><td class="num">{_esc(szn)}</td>'
+    l15_rate, season_rate = clearance_rates(heat, kind)
+    l15_data = "" if l15_rate is None else f"{l15_rate:.4f}"
+    season_data = "" if season_rate is None else f"{season_rate:.4f}"
+    clr_cells = f'<td class="num" data-k="l15">{_esc(l15)}</td><td class="num" data-k="season">{_esc(szn)}</td>'
+    verdict_rank = _VERDICT_RANK[_verdict(e.has_market_data, e.tier, e.ev_percent_model)[0]]
     if not e.has_market_data:
         return f"""
-          <tr data-player="{_esc(e.player.lower())}" data-book="" data-tier="no_market" data-prob="{e.model_prob}" data-ev="">
+          <tr data-player="{_esc(e.player.lower())}" data-book="" data-tier="no_market" data-prob="{e.model_prob}" data-ev=""
+              data-verdict="{verdict_rank}" data-fair="" data-edge="" data-evmarket="" data-books="" data-weather=""
+              data-l15="{l15_data}" data-season="{season_data}">
             <td data-k="verdict">{_verdict_badge(e.has_market_data, e.tier, e.ev_percent_model)}</td>
             <td class="player" data-k="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div>{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
             <td class="event">{_esc(e.event)}</td><td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>{bp_cell}
@@ -284,8 +292,13 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str, all_props_
     temp = f"{e.temp_f:.0f}°F" if e.temp_f is not None else "n/a"
     edge_cell = f"{e.edge_vs_market:+.1%}" if e.edge_vs_market is not None else "n/a"
     ev_market_cell = f"{e.ev_percent_market:+.1f}%" if e.ev_percent_market is not None else "n/a"
+    fair_data = "" if e.market_fair_prob is None else f"{e.market_fair_prob:.4f}"
+    edge_data = "" if e.edge_vs_market is None else f"{e.edge_vs_market:.4f}"
+    evmarket_data = "" if e.ev_percent_market is None else f"{e.ev_percent_market:.2f}"
     return f"""
-          <tr data-player="{_esc(e.player.lower())}" data-book="{_esc(e.best_line.sportsbook.lower())}" data-tier="{_esc(e.tier)}" data-prob="{e.model_prob}" data-ev="{e.ev_percent_model}">
+          <tr data-player="{_esc(e.player.lower())}" data-book="{_esc(e.best_line.sportsbook.lower())}" data-tier="{_esc(e.tier)}" data-prob="{e.model_prob}" data-ev="{e.ev_percent_model}"
+              data-verdict="{verdict_rank}" data-fair="{fair_data}" data-edge="{edge_data}" data-evmarket="{evmarket_data}"
+              data-books="{e.books_quoting}" data-weather="{e.weather_boost_pct}" data-l15="{l15_data}" data-season="{season_data}">
             <td data-k="verdict">{_verdict_badge(e.has_market_data, e.tier, e.ev_percent_model)}</td>
             <td class="player" data-k="player">{_esc(e.player)}{tier}{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
             <td class="event">{_esc(e.event)}</td>
@@ -293,12 +306,12 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str, all_props_
             {bp_cell}
             <td class="num pos" data-k="price">{e.best_line.odds:+d}</td>
             <td class="book" data-k="book">{_esc(e.best_line.sportsbook)}</td>
-            <td class="num">{_fmt_opt_pct(e.market_fair_prob)}</td>
-            <td class="num {'pos' if e.edge_vs_market is not None and e.edge_vs_market >= 0 else 'neg' if e.edge_vs_market is not None else ''}">{edge_cell}</td>
+            <td class="num" data-k="fair">{_fmt_opt_pct(e.market_fair_prob)}</td>
+            <td class="num {'pos' if e.edge_vs_market is not None and e.edge_vs_market >= 0 else 'neg' if e.edge_vs_market is not None else ''}" data-k="edge">{edge_cell}</td>
             <td class="num {'pos' if e.ev_percent_model >= 0 else 'neg'}" data-k="ev">{e.ev_percent_model:+.1f}%</td>
-            <td class="num {'pos' if e.ev_percent_market is not None and e.ev_percent_market >= 0 else 'neg' if e.ev_percent_market is not None else ''}">{ev_market_cell}</td>
-            <td class="num">{e.books_quoting}</td>
-            <td class="wx-cell">{wind}, {temp} <b>{e.weather_boost_pct:+.1f}%</b></td>
+            <td class="num {'pos' if e.ev_percent_market is not None and e.ev_percent_market >= 0 else 'neg' if e.ev_percent_market is not None else ''}" data-k="evmarket">{ev_market_cell}</td>
+            <td class="num" data-k="books">{e.books_quoting}</td>
+            <td class="wx-cell" data-k="weather">{wind}, {temp} <b>{e.weather_boost_pct:+.1f}%</b></td>
             {clr_cells}
           </tr>"""
 
@@ -474,9 +487,11 @@ def _prop_table(
           <th data-k="player">Player<span class="arrow">▾</span></th><th>Matchup</th>
           <th data-k="prob">{_esc(prob_header)}<span class="arrow">▾</span></th><th>BP Model</th>
           <th data-k="price">Best price<span class="arrow">▾</span></th><th data-k="book">Book<span class="arrow">▾</span></th>
-          <th>Market fair</th><th>Edge</th><th data-k="ev">EV (model)<span class="arrow">▾</span></th><th>EV (market)</th><th>Books</th><th>Weather</th>
-          <th title="Real games this player actually cleared this line, out of the last 15 games played">L15 clear</th>
-          <th title="Same real clearance rate over the full season - the baseline to judge L15 clear against">Season rate</th>
+          <th data-k="fair">Market fair<span class="arrow">▾</span></th><th data-k="edge">Edge<span class="arrow">▾</span></th>
+          <th data-k="ev">EV (model)<span class="arrow">▾</span></th><th data-k="evmarket">EV (market)<span class="arrow">▾</span></th>
+          <th data-k="books">Books<span class="arrow">▾</span></th><th data-k="weather">Weather<span class="arrow">▾</span></th>
+          <th data-k="l15" title="Real games this player actually cleared this line, out of the last 15 games played">L15 clear<span class="arrow">▾</span></th>
+          <th data-k="season" title="Same real clearance rate over the full season - the baseline to judge L15 clear against">Season rate<span class="arrow">▾</span></th>
         </tr></thead>
         <tbody id="{table_id}-tbody">{rows}
         </tbody>
@@ -702,9 +717,15 @@ def render_html_report(
       countEl.textContent = visible + ' of ' + rows.length + ' shown';
     }}
 
+    // Every column with a real "better" direction sorts best-first on the
+    // very first click (biggest number on top) - a second click on the
+    // same header reverses it. Text columns (player/book) start A-Z, the
+    // normal expectation there - no real "best" name/book to lead with.
+    var NUMERIC_KEYS = ['prob', 'price', 'ev', 'verdict', 'fair', 'edge', 'evmarket', 'books', 'weather', 'l15', 'season'];
+
     function applySort(key) {{
-      if (sortKey === key) {{ sortDir = -sortDir; }} else {{ sortKey = key; sortDir = 1; }}
-      var numeric = key === 'prob' || key === 'price' || key === 'ev';
+      var numeric = NUMERIC_KEYS.indexOf(key) !== -1;
+      if (sortKey === key) {{ sortDir = -sortDir; }} else {{ sortKey = key; sortDir = numeric ? -1 : 1; }}
       rows.sort(function(a, b) {{
         var av, bv;
         if (numeric) {{
