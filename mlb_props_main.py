@@ -555,6 +555,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "mlb_props/results.py. Writes <data-dir>/clv/<date>.jsonl. Requires --odds-api-key/ODDS_API_KEY (or "
         "--api-key/BETSTAMP_API_KEY, or --mock).",
     )
+    parser.add_argument(
+        "--performance-only",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely (no network calls, no odds credits spent) and "
+        "instead only re-render the Performance dashboard from whatever is already on disk under <data-dir> "
+        "- requires --performance-out. Exists so a workflow can regenerate the dashboard as its own last step, "
+        "after --resolve-results/--record-clv have written that same run's own fresh data: the combined-pipeline "
+        "--performance-out above writes from <data-dir> as of process start, before either of those has run, so "
+        "it's always stale by one full run without this.",
+    )
     return parser.parse_args(argv)
 
 
@@ -629,6 +639,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"Configuration error: {exc}", file=sys.stderr)
             return 2
         text = run_record_clv(odds, args.data_dir, args.game_date)
+        print(text)
+        return 0
+
+    if args.performance_only:
+        if not args.performance_out:
+            print("Configuration error: --performance-only requires --performance-out.", file=sys.stderr)
+            return 2
+        perf_html = render_performance_report(args.data_dir)
+        with open(args.performance_out, "w") as f:
+            f.write(perf_html)
+        text = f"Wrote performance report to {args.performance_out}"
         print(text)
         return 0
 
