@@ -108,6 +108,23 @@ def test_html_report_prop_tables_show_a_verdict_badge():
     assert "verdict-strong" in html_text or "verdict-speculative" in html_text
 
 
+def test_html_report_prop_table_headers_are_all_sortable():
+    html_text = render_html_report(_report())
+    for key in ("verdict", "player", "prob", "price", "book", "fair", "edge", "ev", "evmarket", "books", "weather", "l15", "season"):
+        assert f'data-k="{key}"' in html_text, f"{key} column header is missing its sort arrow"
+
+
+def test_html_report_prop_rows_carry_a_real_sortable_value_per_metric():
+    from mlb_props.betting import build_recommended_bets
+
+    report = _report()
+    strong, _ = build_recommended_bets(report)
+    assert strong  # a real +EV pick with market data, so every new attribute below has a real value to check
+    html_text = render_html_report(report)
+    for attr in ("data-verdict=", "data-fair=", "data-edge=", "data-evmarket=", "data-books=", "data-weather=", "data-l15=", "data-season="):
+        assert attr in html_text, f"{attr} never appears on any prop row"
+
+
 def test_html_report_recommended_bets_show_the_real_market_fair_value():
     from mlb_props.betting import RecommendedBet
     from mlb_props.html_report import _reco_row

@@ -95,6 +95,23 @@ def clearance_cols(heat: Optional[HeatIndex], kind: str) -> "tuple[str, str]":
     return l15, szn
 
 
+def clearance_rates(heat: Optional[HeatIndex], kind: str) -> "tuple[Optional[float], Optional[float]]":
+    """The same real (L15 rate, season rate) `clearance_cols` formats for
+    display, but as raw 0-1 floats instead of strings ("3/15", "45%") -
+    for sorting a real numeric column by actual clearance rate rather than
+    alphabetically by its formatted text. `None` (never a guessed 0) for
+    whatever `clearance_cols` would show as "n/a".
+    """
+    if heat is None:
+        return None, None
+    count_attr, rate_attr = _CLEARANCE_ATTRS[kind]
+    window = heat.clear_l15
+    l15_rate = (getattr(window, count_attr) / window.games) if window is not None and window.games else None
+    season = heat.clear_season
+    season_rate = getattr(season, rate_attr) if season is not None and season.games else None
+    return l15_rate, season_rate
+
+
 def _model_only_line(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
     bp = f" | BP model: {_fmt_pct(e.bp_model_prob)}" if e.bp_model_prob is not None else ""
     l15, szn = clearance_cols(heat, kind)
