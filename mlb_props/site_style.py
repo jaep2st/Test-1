@@ -99,6 +99,14 @@ table.props td.event{ color:var(--ink-muted); font-size:12.5px; white-space:norm
 .tier{ display:inline-block; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; border-radius:5px; padding:2px 6px; margin-top:3px; }
 .tier.agree{ background:var(--positive-tint); color:var(--positive); }
 .tier.model{ background:var(--surface-2); color:var(--ink-muted); }
+.expand-toggle{ display:inline-block; margin-left:8px; font-size:11px; font-weight:600; color:var(--info); cursor:pointer; user-select:none; }
+.expand-toggle:hover{ text-decoration:underline; }
+.detail-panel{ display:none; margin-top:6px; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; max-width:380px; }
+.detail-panel.open{ display:block; }
+.detail-row{ display:flex; justify-content:space-between; gap:14px; padding:2px 0; font-size:11.5px; }
+.detail-row .label{ color:var(--ink-muted); }
+.detail-row .val{ font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; white-space:nowrap; }
+.detail-row .val b{ color:var(--ink); }
 .pos{ color:var(--positive); }
 .neg{ color:var(--negative); }
 .book{ text-transform:capitalize; color:var(--ink-muted); font-size:12.5px; }

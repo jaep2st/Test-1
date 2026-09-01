@@ -15,11 +15,14 @@ from typing import Dict, List, Optional
 from .betting import LiveValueBet, RecommendedBet, build_recommended_bets
 from .edges import EdgeCandidate
 from .hot_streak import HeatIndex
+from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
 from .pipeline import MatchupEnvironment, SlateReport
 from .report import clearance_cols, heat_lookup
 from .scoring import HITS_WEIGHTS, HR_WEIGHTS, TB_WEIGHTS
 from .site_style import STYLE as _STYLE
 from .site_style import nav_html
+
+_WEIGHTS_BY_MARKET = {MARKET_HOME_RUN: HR_WEIGHTS, MARKET_TOTAL_BASES: TB_WEIGHTS, MARKET_HITS: HITS_WEIGHTS}
 
 
 def _esc(s: object) -> str:
@@ -72,6 +75,41 @@ def _hot_row(rank: int, h) -> str:
       </div>"""
 
 
+def _component_label(name: str) -> str:
+    return name.replace("_", " ").replace("pct", "%").title().replace("Hr", "HR").replace("Fb", "FB").replace("Iso", "ISO").replace("Xslg", "xSLG")
+
+
+def _component_detail_html(market: str, components: Dict[str, float]) -> str:
+    """A click-to-expand "why" breakdown for one scored candidate: the real
+    per-component 0-100 value scoring.py computed for it, that component's
+    weight (see HR_WEIGHTS/TB_WEIGHTS/HITS_WEIGHTS - the same numbers the
+    "Model methodology" section already shows in the abstract), and their
+    real product - the actual points that component contributed to this
+    exact player's score. Sorted by that contribution, biggest first, so
+    the real driver of a ranking is never buried in a fixed weight order.
+
+    Real data only: `{}` (no components recorded for this candidate - see
+    EdgeCandidate.components' docstring) or an unrecognized market
+    renders nothing at all, never a fabricated or zeroed-out breakdown.
+    """
+    weights = _WEIGHTS_BY_MARKET.get(market)
+    if not weights or not components:
+        return ""
+    rows = sorted(
+        ((k, components[k], w) for k, w in weights.items() if k in components),
+        key=lambda row: row[1] * row[2],
+        reverse=True,
+    )
+    if not rows:
+        return ""
+    detail_rows = "".join(
+        f'<div class="detail-row"><span class="label">{_esc(_component_label(k))}</span>'
+        f'<span class="val">{v:.0f}/100 &times; {w * 100:.0f}% = <b>{v * w:.1f}</b></span></div>'
+        for k, v, w in rows
+    )
+    return f'<span class="expand-toggle" data-role="expand">why? &#9662;</span><div class="detail-panel">{detail_rows}</div>'
+
+
 def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
     # bp_model_prob: Ballpark Pal's own independent model, when configured
     # (see edges.py's EdgeCandidate docstring) - "n/a" for 2+ TB and
@@ -85,7 +123,7 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
     if not e.has_market_data:
         return f"""
           <tr data-player="{_esc(e.player.lower())}" data-book="" data-tier="no_market" data-prob="{e.model_prob}" data-ev="">
-            <td class="player" data-k="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div></td>
+            <td class="player" data-k="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div>{_component_detail_html(e.market, e.components)}</td>
             <td class="event">{_esc(e.event)}</td><td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>{bp_cell}
             <td colspan="6" class="wx-cell">no book currently quotes this prop</td>{clr_cells}</tr>"""
     # e.tier (edges.py) is the shared source of truth for this
@@ -106,7 +144,7 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
     ev_market_cell = f"{e.ev_percent_market:+.1f}%" if e.ev_percent_market is not None else "n/a"
     return f"""
           <tr data-player="{_esc(e.player.lower())}" data-book="{_esc(e.best_line.sportsbook.lower())}" data-tier="{_esc(e.tier)}" data-prob="{e.model_prob}" data-ev="{e.ev_percent_model}">
-            <td class="player" data-k="player">{_esc(e.player)}{tier}</td>
+            <td class="player" data-k="player">{_esc(e.player)}{tier}{_component_detail_html(e.market, e.components)}</td>
             <td class="event">{_esc(e.event)}</td>
             <td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>
             {bp_cell}
@@ -132,7 +170,7 @@ def _reco_row(r: RecommendedBet) -> str:
     edge_cell = f"{r.edge_vs_market:+.1%}" if r.edge_vs_market is not None else "n/a"
     return f"""
       <div class="reco-row">
-        <div><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div></div>
+        <div><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div>{_component_detail_html(r.market, r.components)}</div>
         <div class="event">{_esc(r.event)}</div>
         <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}{_breakeven_cell(r.breakeven)}</div>
         <div class="prob num">{_fmt_pct(r.model_prob)} model</div>
@@ -234,7 +272,7 @@ def _live_bets_section(live_bets: List[LiveValueBet]) -> str:
 def _weight_rows(weights: dict) -> str:
     rows = []
     for name, w in sorted(weights.items(), key=lambda kv: kv[1], reverse=True):
-        label = name.replace("_", " ").replace("pct", "%").title().replace("Hr", "HR").replace("Fb", "FB").replace("Iso", "ISO").replace("Xslg", "xSLG")
+        label = _component_label(name)
         rows.append(
             f'<div class="weight-row"><div class="wname">{_esc(label)}</div>'
             f'<div class="weight-bar"><i style="width:{w * 100:.0f}%"></i></div>'
@@ -450,6 +488,19 @@ def render_html_report(
 </div>
 <script>
 (function(){{
+  // Shared by every "why?" toggle on the page (prop tables + Recommended
+  // Bets) - one delegated listener rather than wiring each row, so this
+  // still works after applySort() below re-appends rows elsewhere in the
+  // DOM.
+  document.addEventListener('click', function(e) {{
+    var toggle = e.target.closest('.expand-toggle');
+    if (!toggle) return;
+    var panel = toggle.nextElementSibling;
+    if (!panel || !panel.classList.contains('detail-panel')) return;
+    var open = panel.classList.toggle('open');
+    toggle.innerHTML = open ? 'why? &#9652;' : 'why? &#9662;';
+  }});
+
   function initPropTable(id) {{
     var table = document.getElementById(id + '-table');
     if (!table) return;
