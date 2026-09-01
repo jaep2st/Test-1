@@ -33,8 +33,8 @@ relative sizing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 from odds_monitor.ev import american_to_decimal, decimal_to_american, find_fair_prices
 from odds_monitor.models import PropLine
@@ -176,6 +176,11 @@ class RecommendedBet:
     # see breakeven_price()'s docstring. None only if model_prob is ever
     # somehow outside (0, 1), which shouldn't happen in practice.
     breakeven: Optional[int]
+    # The real per-component scoring breakdown behind model_score/model_prob
+    # (see EdgeCandidate.components' docstring) - carried through so the
+    # page can show *why* this specific bet is recommended, not just that
+    # it is. {} for a candidate that predates this field.
+    components: Dict[str, float] = field(default_factory=dict)
 
 
 def _to_recommendation(e: EdgeCandidate) -> Optional[RecommendedBet]:
@@ -201,6 +206,7 @@ def _to_recommendation(e: EdgeCandidate) -> Optional[RecommendedBet]:
         units=units,
         full_kelly_percent=round(kelly_fraction(e.model_prob, decimal_odds) * 100.0, 2),
         breakeven=breakeven_price(e.model_prob),
+        components=e.components,
     )
 
 

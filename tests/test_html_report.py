@@ -112,6 +112,53 @@ def test_html_report_shows_the_breakeven_price_next_to_each_recommended_bet():
     assert f"beat {strong[0].breakeven:+d}" in html_text
 
 
+def test_component_detail_html_sorts_by_real_weighted_contribution():
+    from mlb_props.html_report import _component_detail_html
+
+    # barrel_pct (weight .18) at 80/100 = 14.4 contribution; hard_hit_pct
+    # (weight .13) at 90/100 = 11.7 - barrel_pct should still lead despite
+    # the lower raw value, because contribution (value*weight) is what's
+    # sorted, not the raw value or the weight alone.
+    html_text = _component_detail_html("batter_home_runs", {"barrel_pct": 80.0, "hard_hit_pct": 90.0})
+    assert "expand-toggle" in html_text
+    assert "detail-panel" in html_text
+    assert "Barrel %" in html_text
+    assert html_text.index("Barrel %") < html_text.index("Hard Hit %")
+
+
+def test_component_detail_html_is_empty_with_no_recorded_components():
+    from mlb_props.html_report import _component_detail_html
+
+    assert _component_detail_html("batter_home_runs", {}) == ""
+
+
+def test_component_detail_html_is_empty_for_an_unrecognized_market():
+    from mlb_props.html_report import _component_detail_html
+
+    assert _component_detail_html("not_a_real_market", {"barrel_pct": 80.0}) == ""
+
+
+def test_html_report_prop_tables_carry_a_real_why_drilldown():
+    html_text = render_html_report(_report())
+    assert "expand-toggle" in html_text
+    assert "detail-panel" in html_text
+
+
+def test_html_report_recommended_bets_carry_a_real_why_drilldown():
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _reco_row
+
+    r = RecommendedBet(
+        player="Player A", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+        tier="agree", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=10.0,
+        best_price=200, best_book="draftkings", books_quoting=2, units=1.0, full_kelly_percent=4.0,
+        breakeven=400, components={"barrel_pct": 80.0, "hard_hit_pct": 50.0},
+    )
+    row_html = _reco_row(r)
+    assert "expand-toggle" in row_html
+    assert "Barrel %" in row_html
+
+
 def test_html_report_recommended_bets_empty_state_is_honest_not_hidden():
     from datetime import date as _date
 
