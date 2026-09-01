@@ -160,6 +160,7 @@ tr.hidden-row{ display:none; }
 .reco-row .event{ font-size:12.5px; color:var(--ink-muted); }
 .reco-row .price{ font-size:13.5px; }
 .reco-row .price b{ font-weight:700; }
+.reco-row .breakeven{ font-size:10.5px; color:var(--ink-muted); margin-top:1px; }
 .reco-row .prob{ font-size:13px; }
 .reco-row .edge{ font-size:13px; }
 .reco-units{ display:flex; flex-direction:column; align-items:flex-end; }

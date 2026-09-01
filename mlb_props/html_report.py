@@ -122,13 +122,19 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
           </tr>"""
 
 
+def _breakeven_cell(breakeven: Optional[int]) -> str:
+    if breakeven is None:
+        return ""
+    return f'<div class="breakeven">beat {breakeven:+d}</div>'
+
+
 def _reco_row(r: RecommendedBet) -> str:
     edge_cell = f"{r.edge_vs_market:+.1%}" if r.edge_vs_market is not None else "n/a"
     return f"""
       <div class="reco-row">
         <div><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div></div>
         <div class="event">{_esc(r.event)}</div>
-        <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}</div>
+        <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}{_breakeven_cell(r.breakeven)}</div>
         <div class="prob num">{_fmt_pct(r.model_prob)} model</div>
         <div class="edge num {'pos' if r.edge_vs_market is not None and r.edge_vs_market >= 0 else 'neg' if r.edge_vs_market is not None else ''}">{edge_cell}</div>
         <div class="reco-units"><div class="n">{r.units:g}u</div><div class="lbl">size</div></div>
@@ -177,7 +183,10 @@ def _recommended_bets_section(strong: List[RecommendedBet], speculative: List[Re
       real Kelly sizing assumes that number is genuinely accurate, which is exactly what hasn't been proven yet (see the
       <a href="performance.html">Performance</a> page for the real, growing track record). Treat every size here as a
       conservative starting point to adjust with your own judgment, never as a guarantee. Never bet more than you can
-      afford to lose.
+      afford to lose. <b>"beat +N"/"beat -N"</b> under the price is the exact number to check against your actual
+      sportsbook right now - every price on this page is a snapshot from whenever this report last ran, so if your
+      book's real price is at least that good, the bet is still +EV even though the number shown here has moved;
+      worse than that, it no longer is.
     </div>
   </section>"""
 
@@ -187,7 +196,7 @@ def _live_row(b: LiveValueBet) -> str:
       <div class="reco-row">
         <div><div class="who">{_esc(b.player)}</div><div class="bet">{_esc(b.market_label)}</div></div>
         <div class="event">{_esc(b.event)}</div>
-        <div class="price num"><b class="pos">{b.best_price:+d}</b> {_esc(b.best_book)}</div>
+        <div class="price num"><b class="pos">{b.best_price:+d}</b> {_esc(b.best_book)}{_breakeven_cell(b.breakeven)}</div>
         <div class="prob num">{_fmt_pct(b.fair_prob)} mkt</div>
         <div class="edge num pos">{b.ev_percent:+.1f}%</div>
         <div class="reco-units"><div class="n">{b.units:g}u</div><div class="lbl">size</div></div>
@@ -216,7 +225,8 @@ def _live_bets_section(live_bets: List[LiveValueBet]) -> str:
       conservative 1/8-Kelly against that consensus (same units convention as above). The real risk with a live price
       is less about that consensus being wrong and more about <b>timing</b>: a live line can reprice or disappear
       within seconds, so a real edge here might already be gone by the time you'd act on it. Verify the price is still
-      live on your book before betting it.
+      live on your book before betting it - <b>"beat +N"/"beat -N"</b> under the price is the exact number to check
+      it against: your book's real price needs to be at least that good right now for this to still be worth taking.
     </div>
   </section>"""
 
