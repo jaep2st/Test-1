@@ -39,6 +39,8 @@ def test_renders_without_error_on_a_completely_empty_data_dir(tmp_path):
     assert html.strip().startswith("<!doctype html>")
     assert "No resolved picks yet" in html
     assert f"{REFIT_READY_DAYS} days" in html  # the not-ready-yet framing
+    assert "Weight refit check" in html
+    assert "No resolved pick yet carries real component features" in html
 
 
 def test_renders_real_numbers_from_populated_data(tmp_path):
@@ -65,6 +67,50 @@ def test_renders_real_numbers_from_populated_data(tmp_path):
     assert "100.0%" in html  # real hit rate tile
     assert "+15.4%" in html  # mean CLV tile
     assert "1 real day" in html
+
+
+def test_renders_the_weight_refit_comparison_when_components_exist():
+    import tempfile
+
+    from mlb_props.refit import MIN_PICKS_TO_FIT
+
+    tmp_path = tempfile.mkdtemp()
+    os.makedirs(os.path.join(tmp_path, "picks"))
+    os.makedirs(os.path.join(tmp_path, "results"))
+
+    picks, outcomes = [], []
+    n = MIN_PICKS_TO_FIT + 20
+    for i in range(n):
+        won = i % 2 == 0
+        picks.append(
+            _pick(
+                f"Player {i}",
+                components={
+                    "barrel_pct": 90.0 if won else 10.0,
+                    "hard_hit_pct": 50.0,
+                    "avg_exit_velo": 50.0,
+                    "hr_fb_pct": 50.0,
+                    "pull_air_pct": 50.0,
+                    "platoon_edge": 50.0,
+                    "pitcher_allowed": 50.0,
+                    "pitch_mix_edge": 50.0,
+                    "park_factor": 50.0,
+                    "weather_boost": 50.0,
+                    "hot_streak": 50.0,
+                },
+            )
+        )
+        outcomes.append(GameOutcome(game_date="2026-08-20", player=f"Player {i}", got_hr=won, got_2plus_tb=False, got_hit=False))
+    _append_jsonl(picks, os.path.join(tmp_path, "picks", "2026-08-20.jsonl"))
+    _append_jsonl(outcomes, os.path.join(tmp_path, "results", "2026-08-20.jsonl"))
+
+    html = render_performance_report(tmp_path)
+    assert "Weight refit check" in html
+    assert "1+ HR" in html
+    assert "Barrel Pct" in html  # a real component name in the comparison table
+    # A real, informative component (barrel_pct) vs. an uninformative flat
+    # model_prob should measurably beat the current model here.
+    assert "Fitted weights measurably beat the current hand-set ones" in html
 
 
 def test_escapes_malicious_player_name_in_pick_log(tmp_path):

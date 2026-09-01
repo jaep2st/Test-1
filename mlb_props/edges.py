@@ -38,7 +38,7 @@ bet entirely. Only lines matching the standard line are considered.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from odds_monitor.ev import FairPrice, american_to_decimal, model_ev_percent
@@ -80,6 +80,15 @@ class EdgeCandidate:
     # or Ballpark Pal has no data for this matchup. A genuine second
     # opinion, never blended into model_prob/ev_percent_model themselves.
     bp_model_prob: Optional[float] = None
+    # Each scoring component's raw 0-100-normalized contribution (see
+    # scoring.py's HR_WEIGHTS/TB_WEIGHTS/HITS_WEIGHTS and the matching
+    # *ScoreResult.components) - previously computed every run and only
+    # ever dumped into an unstructured log line, never actually captured
+    # anywhere a future weight refit could use. Threaded through here so
+    # results.py can persist it on PickRecord - see mlb_props/refit.py,
+    # which is the reason this field exists at all. Defaults to {} so
+    # older code/tests constructing an EdgeCandidate without it still work.
+    components: Dict[str, float] = field(default_factory=dict)
 
     @property
     def has_market_data(self) -> bool:
@@ -217,6 +226,7 @@ def _build_edges(
                     is_dome=result.is_dome,
                     weather_boost_pct=result.weather_boost_pct,
                     bp_model_prob=result.bp_model_prob,
+                    components=result.components,
                 )
             )
             continue
@@ -241,6 +251,7 @@ def _build_edges(
                 is_dome=result.is_dome,
                 weather_boost_pct=result.weather_boost_pct,
                 bp_model_prob=result.bp_model_prob,
+                components=result.components,
             )
         )
     return candidates
