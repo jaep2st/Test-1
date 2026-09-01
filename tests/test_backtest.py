@@ -8,8 +8,10 @@ from mlb_props.backtest import (
     calibration_buckets,
     clv_summary,
     hit_rate_by_market,
+    hit_rate_by_run_hour,
     hit_rate_by_tier,
     latest_results_by_key,
+    recorded_at_et,
     resolve_picks,
 )
 from mlb_props.results import ClvRecord, GameOutcome, PickRecord
@@ -125,3 +127,40 @@ def test_hit_rate_by_tier_groups_correctly():
     groups = {g.key: g for g in hit_rate_by_tier(resolved)}
     assert groups["agree"].n == 1
     assert groups["model_only"].n == 1
+
+
+def test_recorded_at_et_converts_real_utc_to_us_eastern():
+    # 22:32 UTC on 2026-08-20 is EDT (UTC-4) - 18:32 ET.
+    pick = _pick("A", recorded_at="2026-08-20T22:32:00+00:00")
+    et = recorded_at_et(pick)
+    assert et.hour == 18
+    assert et.minute == 32
+    assert et.tzinfo is not None
+
+
+def test_hit_rate_by_run_hour_groups_by_the_real_recorded_hour():
+    picks = [
+        _pick("A", recorded_at="2026-08-20T15:00:00+00:00"),  # 11:00 ET
+        _pick("B", recorded_at="2026-08-20T22:30:00+00:00"),  # 18:00 ET
+        _pick("C", recorded_at="2026-08-20T15:10:00+00:00"),  # 11:00 ET - same bucket as A despite a different minute
+    ]
+    results = [_outcome("A", got_hr=True), _outcome("B", got_hr=False), _outcome("C", got_hr=False)]
+    resolved = resolve_picks(picks, results)
+    groups = {g.key: g for g in hit_rate_by_run_hour(resolved)}
+    assert groups["11:00 ET"].n == 2
+    assert groups["11:00 ET"].hit_rate == 0.5
+    assert groups["18:00 ET"].n == 1
+    assert groups["18:00 ET"].hit_rate == 0.0
+
+
+def test_hit_rate_by_run_hour_counts_a_manual_off_schedule_run_honestly():
+    # A pick recorded at an hour outside this project's four scheduled
+    # crons (11am/12pm/6:30pm/10:30pm ET) - e.g. a manual workflow_dispatch
+    # at 3pm ET - must still get its own real bucket, never be dropped or
+    # folded into the nearest scheduled hour.
+    picks = [_pick("A", recorded_at="2026-08-20T19:00:00+00:00")]  # 15:00 ET
+    results = [_outcome("A", got_hr=True)]
+    resolved = resolve_picks(picks, results)
+    groups = {g.key: g for g in hit_rate_by_run_hour(resolved)}
+    assert "15:00 ET" in groups
+    assert groups["15:00 ET"].n == 1

@@ -14,10 +14,19 @@ from __future__ import annotations
 
 import glob
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from .results import ClvRecord, GameOutcome, PickRecord, latest_pick_per_key, load_clv, load_picks, load_results
+
+# Same US-Eastern convention this project already anchors "today" to (see
+# mlb_props_main.py's _MLB_TZ) - MLB is a US league, so "what time did this
+# run" should mean the real Eastern hour a person would recognize, not
+# whatever timezone the runner happens to be in (always UTC on GitHub
+# Actions).
+_ET = ZoneInfo("America/New_York")
 
 
 def _load_all(data_dir: str, subdir: str, loader) -> list:
@@ -157,3 +166,28 @@ def hit_rate_by_market(resolved: List[ResolvedPick]) -> List[HitRateGroup]:
 
 def hit_rate_by_tier(resolved: List[ResolvedPick]) -> List[HitRateGroup]:
     return _group_hit_rate(resolved, lambda r: r.pick.tier)
+
+
+def recorded_at_et(pick: PickRecord) -> datetime:
+    """`pick.recorded_at` (real ISO 8601 UTC, see PickRecord's docstring)
+    converted to real US-Eastern wall-clock time - the actual hour a
+    person watching this run would have seen it fire.
+    """
+    return datetime.fromisoformat(pick.recorded_at).astimezone(_ET)
+
+
+def _run_hour_bucket(pick: PickRecord) -> str:
+    # 24-hour, zero-padded so it both reads unambiguously and sorts
+    # correctly as a plain string - no AM/PM comparison bugs.
+    return f"{recorded_at_et(pick).hour:02d}:00 ET"
+
+
+def hit_rate_by_run_hour(resolved: List[ResolvedPick]) -> List[HitRateGroup]:
+    """Real hit rate grouped by the actual US-Eastern hour each pick was
+    recorded (PickRecord.recorded_at), not by this project's own four
+    scheduled cron times - a manual workflow_dispatch run at any hour
+    still counts honestly here, never silently excluded. Lets a real
+    pattern in when this model performs best emerge from actual results,
+    rather than a guess about which of the daily runs is "the good one."
+    """
+    return _group_hit_rate(resolved, lambda r: _run_hour_bucket(r.pick))

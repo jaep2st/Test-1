@@ -21,10 +21,12 @@ from .backtest import (
     calibration_buckets,
     clv_summary,
     hit_rate_by_market,
+    hit_rate_by_run_hour,
     hit_rate_by_tier,
     load_all_clv,
     load_all_picks,
     load_all_results,
+    recorded_at_et,
     resolve_picks,
 )
 from .refit import MIN_PICKS_TO_FIT, RefitResult, refit_all_markets
@@ -264,6 +266,8 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     calib_svg = _calibration_svg(buckets)
     hit_rate_market_html = _hit_rate_table("Real hit rate by market", by_market, _MARKET_LABELS)
     hit_rate_tier_html = _hit_rate_table("Real hit rate by tier", by_tier, _TIER_LABELS)
+    by_hour = hit_rate_by_run_hour(resolved)
+    hit_rate_hour_html = _hit_rate_table("Real hit rate by hour recorded (ET)", by_hour, {})
     refit_results = refit_all_markets(resolved)
     refit_section_html = _refit_section(refit_results, distinct_days)
 
@@ -272,9 +276,12 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
         p = r.pick
         outcome_cell = '<span class="pos">Won</span>' if r.won else '<span class="neg">Lost</span>'
         price_cell = f"{p.best_price:+d}" if p.best_price is not None else "n/a"
+        recorded_local = recorded_at_et(p)
+        recorded_cell = recorded_local.strftime("%Y-%m-%d %H:%M ET")
         log_rows.append(
             "<tr>"
             f'<td class="num" data-k="date">{_esc(p.game_date)}</td>'
+            f'<td class="num" data-k="time">{_esc(recorded_cell)}</td>'
             f'<td class="player" data-k="player">{_esc(p.player)}</td>'
             f'<td data-k="market">{_esc(_MARKET_LABELS.get(p.market, p.market))}</td>'
             f'<td class="event">{_esc(p.event)}</td>'
@@ -347,6 +354,7 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     <div class="method-grid">
       {hit_rate_market_html}
       {hit_rate_tier_html}
+      {hit_rate_hour_html}
     </div>
   </section>
 
@@ -368,6 +376,7 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
       <table class="props sortable" id="pf-table">
         <thead><tr>
           <th data-k="date">Date<span class="arrow">▾</span></th>
+          <th data-k="time">Recorded (ET)<span class="arrow">▾</span></th>
           <th data-k="player">Player<span class="arrow">▾</span></th>
           <th data-k="market">Market<span class="arrow">▾</span></th>
           <th>Matchup</th>
