@@ -67,7 +67,17 @@ h1.title{ font-size:clamp(30px,4.6vw,44px); font-weight:800; letter-spacing:.01e
 .env-card .rank{ font-family:"Big Shoulders Display",sans-serif; font-weight:800; font-size:13px; color:var(--accent); }
 .env-card .matchup{ font-size:18px; font-weight:600; margin-top:2px; }
 .env-card .pitchers{ font-size:13px; color:var(--ink-muted); margin-top:2px; }
+.env-card .start-time{ font-size:12.5px; font-weight:600; color:var(--accent-strong); margin-top:4px; }
 .env-card .park{ font-size:12.5px; color:var(--ink-muted); margin-top:8px; }
+.env-card .expand-toggle{ display:block; margin:12px 0 0; }
+.env-card .detail-panel{ max-width:none; }
+.game-roster-row{ display:flex; align-items:center; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; }
+.game-roster-row:last-child{ border-bottom:none; }
+.game-roster-row .grp{ flex:1; }
+.game-roster-row .grm{ display:block; color:var(--ink-muted); font-size:10.5px; margin-top:1px; }
+.game-roster-row .grz{ white-space:nowrap; color:var(--ink-muted); }
+.other-props-head{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-muted); margin-top:10px; padding-top:8px; border-top:1px solid var(--border); }
+.detail-panel .game-roster-row{ font-size:11.5px; }
 .env-bar-row{ display:flex; align-items:center; gap:10px; margin-top:10px; }
 .env-bar{ flex:1; height:8px; border-radius:5px; background:var(--surface-2); overflow:hidden; }
 .env-bar > i{ display:block; height:100%; background:linear-gradient(90deg,var(--accent-strong),var(--accent)); border-radius:5px; }
@@ -99,6 +109,12 @@ table.props td.event{ color:var(--ink-muted); font-size:12.5px; white-space:norm
 .tier{ display:inline-block; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; border-radius:5px; padding:2px 6px; margin-top:3px; }
 .tier.agree{ background:var(--positive-tint); color:var(--positive); }
 .tier.model{ background:var(--surface-2); color:var(--ink-muted); }
+.verdict{ display:inline-block; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; border-radius:5px; padding:3px 7px; white-space:nowrap; }
+.verdict-strong{ background:var(--positive-tint); color:var(--positive); }
+.verdict-speculative{ background:var(--accent-tint); color:var(--accent-strong); }
+.verdict-pass{ background:var(--surface-2); color:var(--ink-muted); }
+.verdict-none{ background:var(--surface-2); color:var(--ink-muted); }
+.mkt-fair{ font-size:10.5px; color:var(--ink-muted); margin-top:1px; }
 .expand-toggle{ display:inline-block; margin-left:8px; font-size:11px; font-weight:600; color:var(--info); cursor:pointer; user-select:none; }
 .expand-toggle:hover{ text-decoration:underline; }
 .detail-panel{ display:none; margin-top:6px; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; max-width:380px; }
