@@ -67,6 +67,12 @@ def test_renders_real_numbers_from_populated_data(tmp_path):
     assert "100.0%" in html  # real hit rate tile
     assert "+15.4%" in html  # mean CLV tile
     assert "1 real day" in html
+    # 2026-08-20T18:00:00+00:00 (the _pick fixture's default recorded_at)
+    # is 14:00 ET (EDT, UTC-4) - both the raw pick-log cell and the real
+    # hit-rate-by-hour breakdown should show that real converted time.
+    assert "2026-08-20 14:00 ET" in html
+    assert "Real hit rate by hour recorded (ET)" in html
+    assert "14:00 ET" in html
 
 
 def test_renders_the_weight_refit_comparison_when_components_exist():
