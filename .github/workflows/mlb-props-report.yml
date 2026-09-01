@@ -193,6 +193,13 @@ jobs:
               BOOKS_ARGS+=(--books "$b")
             done
           fi
+          # --performance-out deliberately NOT passed here even though this
+          # invocation accepts it: writing it now would render from data/ as
+          # of process start, before "Resolve yesterday's real outcomes" and
+          # "Record closing-line value" below have appended THIS run's own
+          # fresh data - stale by a full run, every run. The Performance
+          # dashboard is instead (re)rendered as its own step, after those,
+          # near the end of this job.
           python mlb_props_main.py \
             --date "${{ inputs.date || 'today' }}" \
             --min-ev "${{ inputs.min_ev || '0' }}" \
@@ -204,7 +211,6 @@ jobs:
             --pdf-out public/Longball_Board.pdf \
             --record-picks \
             --data-dir data \
-            --performance-out public/performance.html \
             --log-level DEBUG
 
       - name: Upload the PDF as a workflow artifact
@@ -294,6 +300,21 @@ jobs:
           BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
         run: |
           python mlb_props_main.py --record-clv --date "${{ inputs.date || 'today' }}" --data-dir data
+
+      - name: Regenerate the Performance dashboard from this run's finalized data
+        run: |
+          # Confirmed live (2026-09-01): public/performance.html showed "0
+          # real days of resolved picks collected" even with a genuinely
+          # non-empty data/results/*.jsonl already committed to main -
+          # because the main report step above wrote it from data/ as of
+          # checkout, before "Resolve yesterday's real outcomes" (and, on
+          # the 2:30 UTC cron, "Record closing-line value") had a chance to
+          # add anything - so the dashboard was always exactly one full run
+          # stale. This step re-renders it, after those, with
+          # --performance-only so it never re-invokes the live-data
+          # pipeline - no network calls, no Odds API credits spent, just
+          # reads data/*.jsonl and writes one HTML file.
+          python mlb_props_main.py --performance-only --performance-out public/performance.html --data-dir data
 
       - uses: actions/upload-pages-artifact@v3
         with:

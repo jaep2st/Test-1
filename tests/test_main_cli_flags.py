@@ -86,6 +86,33 @@ def test_record_clv_without_any_odds_key_still_runs_gracefully(tmp_path):
     assert (data_dir / "clv" / "2026-08-20.jsonl").exists() is False  # zero records -> nothing written
 
 
+def test_performance_only_regenerates_from_already_recorded_data_with_no_pipeline_run(tmp_path):
+    # The exact regression this reproduces: public/performance.html showed
+    # "0 real days of resolved picks collected" despite a real, non-empty
+    # data/results/*.jsonl already on disk, because the combined pipeline
+    # call's --performance-out rendered before that data existed. This
+    # confirms --performance-only picks up already-recorded picks/results
+    # with NO --mock and NO odds key configured at all - proving it never
+    # touches build_providers()/run_pipeline (which would otherwise error
+    # or attempt a real network fetch here).
+    data_dir = tmp_path / "data"
+    rc = main(["--mock", "--mock-seed", "3", "--date", "2026-08-20", "--record-picks", "--data-dir", str(data_dir)])
+    assert rc == 0
+    perf_out = tmp_path / "performance.html"
+    rc = main(["--performance-only", "--performance-out", str(perf_out), "--data-dir", str(data_dir)])
+    assert rc == 0
+    assert perf_out.exists()
+    assert perf_out.read_text().strip().startswith("<!doctype html>")
+
+
+def test_performance_only_requires_performance_out(tmp_path, capsys):
+    rc = main(["--performance-only", "--data-dir", str(tmp_path / "data")])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "Configuration error" in err
+    assert "--performance-out" in err
+
+
 def test_mock_mode_never_attempts_a_live_bets_fetch(tmp_path):
     # --mock has no real odds key at all - the live cross-book value scan
     # must be skipped entirely (honest empty state on the page), not
