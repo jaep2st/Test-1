@@ -27,6 +27,7 @@ from .backtest import (
     load_all_results,
     resolve_picks,
 )
+from .refit import MIN_PICKS_TO_FIT, RefitResult, refit_all_markets
 from .site_style import STYLE, nav_html
 
 # Real days of results needed before a weight refit (see scoring.py) would
@@ -136,6 +137,77 @@ def _hit_rate_table(title: str, groups: List[HitRateGroup], label_map: dict) -> 
     </div>"""
 
 
+def _refit_card(r: RefitResult, distinct_days: int) -> str:
+    label = _MARKET_LABELS.get(r.market, r.market)
+    notes = []
+    if not r.reliable:
+        notes.append(
+            f'<div class="empty">Only {r.n_train} real training row{"s" if r.n_train != 1 else ""} so far '
+            f"(need &ge;{MIN_PICKS_TO_FIT}) - shown for transparency, not yet actionable.</div>"
+        )
+    if distinct_days < REFIT_READY_DAYS:
+        notes.append(
+            f'<div class="empty">Also under {REFIT_READY_DAYS} real distinct days ({distinct_days} so far) - '
+            "even a numerically-reliable fit this early can still be overfit to a handful of days' variance.</div>"
+        )
+    if r.fitted_test_log_loss is None or r.current_test_log_loss is None:
+        verdict, verdict_cls = "Not enough held-out picks yet for a real comparison.", ""
+    elif r.improves_on_current:
+        verdict = (
+            f"Fitted weights measurably beat the current hand-set ones on real held-out data "
+            f"({r.fitted_test_log_loss:.3f} vs {r.current_test_log_loss:.3f} log-loss, lower is better)."
+        )
+        verdict_cls = "pos"
+    else:
+        verdict = (
+            f"Not yet distinguishable from the current hand-set model on real held-out data "
+            f"({r.fitted_test_log_loss:.3f} vs {r.current_test_log_loss:.3f} log-loss, lower is better)."
+        )
+        verdict_cls = ""
+    comp_rows = "".join(
+        f"<tr><td>{_esc(k.replace('_', ' ').title())}</td>"
+        f'<td class="num">{r.current_weights.get(k, 0.0):.2f}</td>'
+        f'<td class="num">{r.fitted_importance.get(k, 0.0):.2f}</td></tr>'
+        for k in r.current_weights
+    )
+    return f"""
+    <div class="method-card">
+      <h3>{_esc(label)} <span class="hint">n={r.n_train} train / {r.n_test} test</span></h3>
+      {''.join(notes)}
+      <div class="{verdict_cls}" style="font-size:13px;margin:6px 0 10px;">{_esc(verdict)}</div>
+      <table class="props" style="min-width:0;">
+        <thead><tr><th>Component</th><th>Current weight</th><th>Fitted importance</th></tr></thead>
+        <tbody>{comp_rows}</tbody>
+      </table>
+    </div>"""
+
+
+def _refit_section(refit_results: List[RefitResult], distinct_days: int) -> str:
+    if not refit_results:
+        body = (
+            '<div class="empty">No resolved pick yet carries real component features to fit from - this needs '
+            "picks recorded after mlb_props/refit.py shipped (see PickRecord.components's docstring).</div>"
+        )
+    else:
+        body = '<div class="method-grid">' + "".join(_refit_card(r, distinct_days) for r in refit_results) + "</div>"
+    return f"""
+  <section class="section">
+    <div class="section-head">
+      <h2>Weight refit check</h2>
+      <span class="hint">Real logistic-regression fit vs. the current hand-set weights, on real held-out data</span>
+    </div>
+    {body}
+    <div class="reco-disclosure">
+      <b>This is a transparent comparison, never a live behavior change.</b> mlb_props/scoring.py's weights stay
+      exactly what they are regardless of what's shown here - a fitted result is real evidence to weigh, not
+      something this project applies automatically. "Fitted importance" is each component's normalized share of the
+      logistic regression's own coefficients - a genuinely different function from scoring.py's normalize-then-
+      calibrate pipeline, so treat it as a relative-importance signal to inform a manual weight change, never as a
+      literal drop-in replacement for the current-weight column next to it.
+    </div>
+  </section>"""
+
+
 def render_performance_report(data_dir: str, generated_at: Optional[datetime] = None) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
 
@@ -192,6 +264,8 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     calib_svg = _calibration_svg(buckets)
     hit_rate_market_html = _hit_rate_table("Real hit rate by market", by_market, _MARKET_LABELS)
     hit_rate_tier_html = _hit_rate_table("Real hit rate by tier", by_tier, _TIER_LABELS)
+    refit_results = refit_all_markets(resolved)
+    refit_section_html = _refit_section(refit_results, distinct_days)
 
     log_rows = []
     for r in sorted(resolved, key=lambda r: (r.pick.game_date, r.pick.player), reverse=True):
@@ -275,6 +349,8 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
       {hit_rate_tier_html}
     </div>
   </section>
+
+  {refit_section_html}
 
   <section class="section">
     <div class="section-head">

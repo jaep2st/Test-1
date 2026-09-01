@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -71,6 +71,14 @@ class PickRecord:
     ev_percent_market: Optional[float]
     edge_vs_market: Optional[float]
     books_quoting: int
+    # Each scoring component's raw 0-100-normalized value at pick time -
+    # see EdgeCandidate.components' docstring. `{}` for any pick recorded
+    # before this field existed (an old JSONL row deserializes fine via
+    # this default, it just carries no real features to fit from) - this
+    # is what mlb_props/refit.py needs to fit real weights against real
+    # outcomes; before this field, REFIT_READY_DAYS could never actually
+    # trigger anything, no matter how many days passed.
+    components: Dict[str, float] = field(default_factory=dict)
 
     @property
     def key(self) -> Tuple[str, str, str]:
@@ -179,6 +187,7 @@ def _pick_record(game_date: date, recorded_at: datetime, e: EdgeCandidate) -> Pi
         ev_percent_market=e.ev_percent_market,
         edge_vs_market=e.edge_vs_market,
         books_quoting=e.books_quoting,
+        components=e.components,
     )
 
 
