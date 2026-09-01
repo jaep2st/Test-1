@@ -102,6 +102,16 @@ def test_html_report_shows_recommended_bets_with_real_units():
     assert strong[0].player in html_text
 
 
+def test_html_report_shows_the_breakeven_price_next_to_each_recommended_bet():
+    from mlb_props.betting import build_recommended_bets
+
+    report = _report()
+    strong, _ = build_recommended_bets(report)
+    assert strong
+    html_text = render_html_report(report)
+    assert f"beat {strong[0].breakeven:+d}" in html_text
+
+
 def test_html_report_recommended_bets_empty_state_is_honest_not_hidden():
     from datetime import date as _date
 
@@ -123,7 +133,7 @@ def test_html_report_escapes_malicious_player_name_in_recommended_bets():
         player="<script>alert(1)</script>", market="batter_home_runs", market_label="1+ HR",
         event="Team A @ Team B", tier="agree", model_prob=0.20, market_fair_prob=0.15,
         edge_vs_market=0.05, ev_percent_model=10.0, best_price=200, best_book="draftkings",
-        books_quoting=2, units=1.0, full_kelly_percent=4.0,
+        books_quoting=2, units=1.0, full_kelly_percent=4.0, breakeven=400,
     )
     row_html = _reco_row(malicious)
     assert "<script>alert(1)</script>" not in row_html

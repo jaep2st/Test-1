@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from odds_monitor.ev import american_to_decimal, find_fair_prices
+from odds_monitor.ev import american_to_decimal, decimal_to_american, find_fair_prices
 from odds_monitor.models import PropLine
 
 from .edges import EdgeCandidate
@@ -83,6 +83,26 @@ _EXPECTED_LINE_FOR_MARKET = {
     MARKET_TOTAL_BASES: TOTAL_BASES_LINE_FOR_2PLUS,
     MARKET_HITS: HITS_LINE_FOR_1PLUS,
 }
+
+
+def breakeven_price(true_prob: float) -> Optional[int]:
+    """The exact American price at which a bet on `true_prob` has EV% == 0 -
+    the real "number to beat," useful precisely because every price on this
+    page is a snapshot: by the time you check your actual sportsbook, the
+    real price may have moved. You don't need this project to re-fetch
+    anything to answer "is it still a good bet" - just compare your book's
+    current price to this one. A price at least as good (a bigger plus
+    number, or a less-negative minus number) is still +EV against this
+    project's own probability estimate; anything worse than this number no
+    longer is, even if it once was when this page was generated.
+
+    None when `true_prob` is at or outside (0, 1) - no finite fair price
+    exists there (shouldn't happen for a real probability estimate, but
+    "unknown stays unknown" rather than a nonsense number).
+    """
+    if true_prob <= 0.0 or true_prob >= 1.0:
+        return None
+    return decimal_to_american(1.0 / true_prob)
 
 
 def kelly_fraction(model_prob: float, decimal_odds: float) -> float:
@@ -152,6 +172,10 @@ class RecommendedBet:
     # shown alongside `units` so the math behind the recommendation is never
     # hidden, only made more conservative.
     full_kelly_percent: float
+    # The exact price at which this bet stops being +EV against model_prob -
+    # see breakeven_price()'s docstring. None only if model_prob is ever
+    # somehow outside (0, 1), which shouldn't happen in practice.
+    breakeven: Optional[int]
 
 
 def _to_recommendation(e: EdgeCandidate) -> Optional[RecommendedBet]:
@@ -176,6 +200,7 @@ def _to_recommendation(e: EdgeCandidate) -> Optional[RecommendedBet]:
         books_quoting=e.books_quoting,
         units=units,
         full_kelly_percent=round(kelly_fraction(e.model_prob, decimal_odds) * 100.0, 2),
+        breakeven=breakeven_price(e.model_prob),
     )
 
 
@@ -241,9 +266,18 @@ class LiveValueBet:
     fair_prob: float  # the real, de-vigged multi-book consensus probability - not this project's model
     best_price: int
     best_book: str
-    books_used: int  # how many books' quotes went into the de-vig - always 2+, find_fair_prices requires it
+    books_used: int  # how many books had BOTH sides quoted (used for the de-vig itself) - can be as
+    # low as 1: find_fair_prices only requires one book with a real two-sided price to de-vig its
+    # OWN vig, then shops the best price for that side across every book quoting it (including
+    # single-sided ones, e.g. betrivers' live batter_home_runs "Over"-only pricing). A books_used=1
+    # bet is still real (that book's own no-vig probability vs. a genuinely different book's price),
+    # just a weaker signal than several books independently agreeing - worth weighing accordingly.
     ev_percent: float  # best price's EV vs. the de-vigged consensus
     units: float
+    # The exact price at which this bet stops being +EV against fair_prob -
+    # see breakeven_price()'s docstring. Especially useful here: a live
+    # price is the most likely to have already moved by the time you look.
+    breakeven: Optional[int]
 
 
 def build_live_value_bets(odds_lines: List[PropLine]) -> List[LiveValueBet]:
@@ -304,6 +338,7 @@ def build_live_value_bets(odds_lines: List[PropLine]) -> List[LiveValueBet]:
                 books_used=fp.books_used,
                 ev_percent=round(fp.ev_percent, 2),
                 units=units,
+                breakeven=breakeven_price(fp.fair_prob),
             )
         )
     out.sort(key=lambda b: b.ev_percent, reverse=True)

@@ -116,7 +116,7 @@ def test_run_live_value_scan_fetches_only_live_and_returns_built_bets(monkeypatc
 
     fake_bet = LiveValueBet(
         player="Test Player", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
-        fair_prob=0.15, best_price=650, best_book="draftkings", books_used=2, ev_percent=9.5, units=0.5,
+        fair_prob=0.15, best_price=650, best_book="draftkings", books_used=2, ev_percent=9.5, units=0.5, breakeven=567,
     )
     monkeypatch.setattr(mlb_props_main, "TheOddsApiProvider", _FakeLiveProvider)
     monkeypatch.setattr(mlb_props_main, "build_live_value_bets", lambda lines: [fake_bet] if lines == ["sentinel-line"] else [])
@@ -134,7 +134,7 @@ def test_html_report_renders_live_bets_passed_to_it():
 
     live_bet = LiveValueBet(
         player="Test Player", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
-        fair_prob=0.15, best_price=650, best_book="draftkings", books_used=2, ev_percent=9.5, units=0.5,
+        fair_prob=0.15, best_price=650, best_book="draftkings", books_used=2, ev_percent=9.5, units=0.5, breakeven=567,
     )
     empty_report = SlateReport(
         game_date=_date(2026, 8, 20), slate=[], matchup_environments=[], hot_batters=[],
@@ -144,3 +144,4 @@ def test_html_report_renders_live_bets_passed_to_it():
     assert "Test Player" in html_text
     assert "+650" in html_text
     assert "draftkings" in html_text
+    assert "beat +567" in html_text

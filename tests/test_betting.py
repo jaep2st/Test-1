@@ -4,16 +4,20 @@ recommendations. See that module's docstring for the conservatism choices
 (fractional Kelly, floor/cap, tier-based multiplier) this locks in.
 """
 
+import pytest
+
 from mlb_props.betting import (
     MAX_UNITS,
     MIN_EV_PERCENT_FOR_LIVE,
     MIN_EV_PERCENT_TO_RECOMMEND,
     MIN_UNITS,
+    breakeven_price,
     build_live_value_bets,
     build_recommended_bets,
     kelly_fraction,
     recommend_units,
 )
+from odds_monitor.ev import american_to_implied_prob
 from mlb_props.edges import EdgeCandidate
 from mlb_props.pipeline import SlateReport
 from odds_monitor.models import PropLine
@@ -29,6 +33,27 @@ def test_kelly_fraction_is_zero_or_negative_with_no_real_edge():
     # -300 (decimal 1.333) implies ~75% - a 60% true probability is worse
     # than the market's own price, no real edge.
     assert kelly_fraction(0.60, 1.333) <= 0
+
+
+def test_breakeven_price_is_even_money_at_a_coin_flip():
+    assert breakeven_price(0.5) == 100
+
+
+def test_breakeven_price_round_trips_back_to_the_same_probability():
+    # By construction, the implied probability of the breakeven price itself
+    # (no vig involved - it's a single number, not a two-sided market) must
+    # equal the true probability it was derived from.
+    for true_prob in (0.05, 0.2, 0.43, 0.6, 0.91):
+        price = breakeven_price(true_prob)
+        assert price is not None
+        assert american_to_implied_prob(price) == pytest.approx(true_prob, abs=1e-3)
+
+
+def test_breakeven_price_is_none_outside_a_real_probability_range():
+    assert breakeven_price(0.0) is None
+    assert breakeven_price(1.0) is None
+    assert breakeven_price(-0.1) is None
+    assert breakeven_price(1.5) is None
 
 
 def test_recommend_units_returns_none_when_no_real_edge():
@@ -109,6 +134,13 @@ def _report(hr_edges=None, tb_edges=None, hits_edges=None):
     )
 
 
+def test_build_recommended_bets_includes_the_matching_breakeven_price():
+    edge = _agree_edge("Player Z", "batter_home_runs")
+    strong, _ = build_recommended_bets(_report(hr_edges=[edge]))
+    assert len(strong) == 1
+    assert strong[0].breakeven == breakeven_price(strong[0].model_prob)
+
+
 def test_build_recommended_bets_splits_by_tier():
     strong_edge = _agree_edge("Player A", "batter_home_runs")
     speculative_edge = _model_only_edge("Player B", "batter_hits")
@@ -153,6 +185,18 @@ def test_build_recommended_bets_combines_all_three_markets():
 
 def _live_line(player, side, price, book, market="batter_home_runs", event="Team X @ Team Y", is_live=True):
     return PropLine(player=player, team=None, league="mlb", market=market, side=side, line=0.5, odds=price, sportsbook=book, event=event, is_live=is_live)
+
+
+def test_build_live_value_bets_includes_the_matching_breakeven_price():
+    lines = [
+        _live_line("Player A", "yes", 900, "draftkings"),
+        _live_line("Player A", "no", -900, "draftkings"),
+        _live_line("Player A", "yes", 650, "betmgm"),
+        _live_line("Player A", "no", -1200, "betmgm"),
+    ]
+    bets = build_live_value_bets(lines)
+    assert len(bets) == 1
+    assert bets[0].breakeven == breakeven_price(bets[0].fair_prob)
 
 
 def test_build_live_value_bets_finds_real_cross_book_value():
