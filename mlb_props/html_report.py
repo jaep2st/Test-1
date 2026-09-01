@@ -11,8 +11,9 @@ from __future__ import annotations
 import html
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
-from .betting import LiveValueBet, RecommendedBet, build_recommended_bets
+from .betting import MIN_EV_PERCENT_TO_RECOMMEND, LiveValueBet, RecommendedBet, build_recommended_bets
 from .edges import EdgeCandidate
 from .hot_streak import HeatIndex
 from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
@@ -23,6 +24,27 @@ from .site_style import STYLE as _STYLE
 from .site_style import nav_html
 
 _WEIGHTS_BY_MARKET = {MARKET_HOME_RUN: HR_WEIGHTS, MARKET_TOTAL_BASES: TB_WEIGHTS, MARKET_HITS: HITS_WEIGHTS}
+# Same US-Eastern convention this project already anchors "today" to (see
+# mlb_props_main.py's _MLB_TZ) - a real MLB start time should read in the
+# US Eastern hour a person would recognize, not raw UTC.
+_ET = ZoneInfo("America/New_York")
+
+
+def _fmt_start_time_et(game_time_utc: Optional[str]) -> str:
+    """`ProbableMatchup.game_time_utc` (real MLB Stats API `gameDate`,
+    already fetched for every game every run - just never shown) as a
+    real US-Eastern start time. "TBD" for a genuinely missing/malformed
+    value - never a guessed time.
+    """
+    if not game_time_utc:
+        return "TBD"
+    try:
+        dt = datetime.fromisoformat(game_time_utc.replace("Z", "+00:00")).astimezone(_ET)
+    except ValueError:
+        return "TBD"
+    hour12 = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{hour12}:{dt.minute:02d} {ampm} ET"
 
 
 def _esc(s: object) -> str:
@@ -44,20 +66,60 @@ def _wind_chip(env: MatchupEnvironment) -> str:
     return direction
 
 
-def _env_card(env: MatchupEnvironment, rank: int) -> str:
+_MARKET_SHORT_LABELS = {MARKET_HOME_RUN: "1+ HR", MARKET_TOTAL_BASES: "2+ TB", MARKET_HITS: "1+ Hits"}
+_VERDICT_RANK = {"STRONG BET": 3, "SPECULATIVE": 2, "PASS": 1, "NO PRICE YET": 0}
+
+
+def _game_roster_html(candidates: List[EdgeCandidate]) -> str:
+    """Every real scored candidate for one specific game, across all three
+    markets - "click a game, see everything helpful about it," using data
+    this project has already computed every run, nothing new fetched.
+    Sorted so the best real plays for this game lead: Strong verdicts
+    first, then Speculative, then Pass/No price, each group by EV%
+    descending within itself.
+    """
+    if not candidates:
+        return '<div class="empty" style="padding:10px 0;">No candidates scored for this game.</div>'
+
+    def sort_key(c: EdgeCandidate):
+        label, _cls = _verdict(c.has_market_data, c.tier, c.ev_percent_model)
+        return (_VERDICT_RANK[label], c.ev_percent_model if c.ev_percent_model is not None else -999.0)
+
+    ordered = sorted(candidates, key=sort_key, reverse=True)
+    rows = []
+    for c in ordered:
+        label, css_class = _verdict(c.has_market_data, c.tier, c.ev_percent_model)
+        price_text = f"{c.best_line.odds:+d} {c.best_line.sportsbook}" if c.best_line else "no price yet"
+        rows.append(
+            f'<div class="game-roster-row"><span class="verdict {css_class}">{_esc(label)}</span>'
+            f'<span class="grp"><b>{_esc(c.player)}</b><span class="grm">{_esc(_MARKET_SHORT_LABELS.get(c.market, c.market))}</span></span>'
+            f'<span class="grz num">{_esc(price_text)}</span></div>'
+        )
+    return "".join(rows)
+
+
+def _env_card(env: MatchupEnvironment, rank: int, candidates: List[EdgeCandidate]) -> str:
     m = env.matchup
     wind_class = "wind-out" if env.weather_boost_pct > 0 else ("wind-in" if env.weather_boost_pct < 0 else "")
     pitchers = " vs ".join(p for p in (m.away_pitcher, m.home_pitcher) if p) or "Probable pitchers TBA"
+    start_time = _fmt_start_time_et(m.game_time_utc)
+    # m.status: MLB Stats API's own real-time game status (Pre-Game/In
+    # Progress/Final/etc, see ProbableMatchup's docstring) - already
+    # fetched every run, shown here for the first time.
+    status_suffix = f" &middot; {_esc(m.status)}" if m.status else ""
     return f"""
       <div class="env-card">
         <div class="rank">#{rank} ENVIRONMENT</div>
         <div class="matchup">{_esc(m.away_team)} @ {_esc(m.home_team)}</div>
+        <div class="start-time">{_esc(start_time)}{status_suffix}</div>
         <div class="pitchers">{_esc(pitchers)}</div>
         <div class="park">{_esc(m.venue)} &middot; park HR factor {env.park_hr_factor:.0f} (neutral = 100)</div>
         <div class="env-bar-row"><div class="env-bar"><i style="width:{max(0, min(100, env.environment_score)):.1f}%"></i></div><div class="env-score num">{env.environment_score:.1f}</div></div>
         <div class="env-chips">
           <span class="chip {wind_class}">{env.weather_boost_pct:+.1f}% weather</span>
         </div>
+        <span class="expand-toggle" data-role="expand">view this game's props &#9662;</span>
+        <div class="detail-panel game-roster">{_game_roster_html(candidates)}</div>
       </div>"""
 
 
@@ -75,42 +137,121 @@ def _hot_row(rank: int, h) -> str:
       </div>"""
 
 
+def _verdict(has_market_data: bool, tier: str, ev_percent_model: Optional[float]) -> "tuple[str, str]":
+    """A single, plain-language read on whether a candidate is actually
+    worth betting - not a new judgment call, just making this project's
+    own already-computed tier/EV classification (the exact same numbers
+    that decide what shows up in "Tonight's Recommended Bets" - see
+    betting.py's MIN_EV_PERCENT_TO_RECOMMEND) visible at a glance on
+    every row, not just the ones that happen to clear Kelly sizing too.
+    Returns (label, css class).
+
+    - "NO PRICE YET": has_market_data is False - nothing to check the
+      model against yet.
+    - "PASS": a real price exists, but the edge is at or below noise
+      level (< MIN_EV_PERCENT_TO_RECOMMEND) - the same bar this project
+      uses everywhere else to call an edge real vs. noise.
+    - "SPECULATIVE": a real, above-bar edge, but only this project's own
+      model sees it (tier != "agree") - same meaning as the Speculative
+      section of Tonight's Recommended Bets.
+    - "STRONG BET": a real, above-bar edge AND the market's own cross-book
+      consensus agrees (tier == "agree") - same meaning as the Strong
+      section there.
+    """
+    if not has_market_data:
+        return ("NO PRICE YET", "verdict-none")
+    if ev_percent_model is None or ev_percent_model < MIN_EV_PERCENT_TO_RECOMMEND:
+        return ("PASS", "verdict-pass")
+    if tier == "agree":
+        return ("STRONG BET", "verdict-strong")
+    return ("SPECULATIVE", "verdict-speculative")
+
+
+def _verdict_badge(has_market_data: bool, tier: str, ev_percent_model: Optional[float]) -> str:
+    label, css_class = _verdict(has_market_data, tier, ev_percent_model)
+    return f'<span class="verdict {css_class}">{_esc(label)}</span>'
+
+
 def _component_label(name: str) -> str:
     return name.replace("_", " ").replace("pct", "%").title().replace("Hr", "HR").replace("Fb", "FB").replace("Iso", "ISO").replace("Xslg", "xSLG")
 
 
-def _component_detail_html(market: str, components: Dict[str, float]) -> str:
-    """A click-to-expand "why" breakdown for one scored candidate: the real
-    per-component 0-100 value scoring.py computed for it, that component's
-    weight (see HR_WEIGHTS/TB_WEIGHTS/HITS_WEIGHTS - the same numbers the
-    "Model methodology" section already shows in the abstract), and their
-    real product - the actual points that component contributed to this
-    exact player's score. Sorted by that contribution, biggest first, so
-    the real driver of a ranking is never buried in a fixed weight order.
+def _other_props_html(player: str, market: str, event: str, all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]]) -> str:
+    """"Click a player, see their props": every other real scored
+    candidate for this exact player tonight (a different market, or the
+    same market in a different game - a doubleheader) - real data this
+    project has already computed for every candidate every run, just
+    never linked across markets before. Excludes the row's own (market,
+    event) so a candidate never lists itself. Empty when the player has
+    no other real candidate tonight - never a fabricated "nothing else"
+    placeholder, just nothing rendered.
+    """
+    if not all_props_by_player:
+        return ""
+    others = [
+        c for c in all_props_by_player.get(player.strip().lower(), []) if not (c.market == market and c.event == event)
+    ]
+    if not others:
+        return ""
+    ordered = sorted(others, key=lambda c: (c.event, c.market))
+    rows = []
+    for c in ordered:
+        label, css_class = _verdict(c.has_market_data, c.tier, c.ev_percent_model)
+        price_text = f"{c.best_line.odds:+d} {c.best_line.sportsbook}" if c.best_line else "no price yet"
+        rows.append(
+            f'<div class="game-roster-row"><span class="verdict {css_class}">{_esc(label)}</span>'
+            f'<span class="grp"><b>{_esc(_MARKET_SHORT_LABELS.get(c.market, c.market))}</b><span class="grm">{_esc(c.event)}</span></span>'
+            f'<span class="grz num">{_esc(price_text)}</span></div>'
+        )
+    return f'<div class="other-props-head">Also scored tonight</div>{"".join(rows)}'
 
-    Real data only: `{}` (no components recorded for this candidate - see
-    EdgeCandidate.components' docstring) or an unrecognized market
-    renders nothing at all, never a fabricated or zeroed-out breakdown.
+
+def _component_detail_html(
+    market: str,
+    components: Dict[str, float],
+    player: Optional[str] = None,
+    event: Optional[str] = None,
+    all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None,
+) -> str:
+    """A click-to-expand panel with two real, already-computed pieces:
+
+    1. "Why" - the real per-component 0-100 value scoring.py computed for
+       this candidate, that component's weight (see HR_WEIGHTS/TB_WEIGHTS/
+       HITS_WEIGHTS - the same numbers the "Model methodology" section
+       already shows in the abstract), and their real product - the
+       actual points that component contributed to this exact player's
+       score. Sorted by that contribution, biggest first, so the real
+       driver of a ranking is never buried in a fixed weight order.
+    2. "Also scored tonight" - this same player's other real candidates
+       across markets/games, when `player`/`all_props_by_player` are
+       supplied - see `_other_props_html`.
+
+    Real data only throughout: `{}` components (predates this field - see
+    EdgeCandidate.components' docstring), an unrecognized market, and no
+    other real candidates for this player all render nothing for their
+    respective piece; the whole toggle renders nothing at all if BOTH
+    pieces are empty, never a fabricated or zeroed-out breakdown.
     """
     weights = _WEIGHTS_BY_MARKET.get(market)
-    if not weights or not components:
+    detail_rows = ""
+    if weights and components:
+        rows = sorted(
+            ((k, components[k], w) for k, w in weights.items() if k in components),
+            key=lambda row: row[1] * row[2],
+            reverse=True,
+        )
+        detail_rows = "".join(
+            f'<div class="detail-row"><span class="label">{_esc(_component_label(k))}</span>'
+            f'<span class="val">{v:.0f}/100 &times; {w * 100:.0f}% = <b>{v * w:.1f}</b></span></div>'
+            for k, v, w in rows
+        )
+    other_props = _other_props_html(player, market, event, all_props_by_player) if player and event else ""
+    if not detail_rows and not other_props:
         return ""
-    rows = sorted(
-        ((k, components[k], w) for k, w in weights.items() if k in components),
-        key=lambda row: row[1] * row[2],
-        reverse=True,
-    )
-    if not rows:
-        return ""
-    detail_rows = "".join(
-        f'<div class="detail-row"><span class="label">{_esc(_component_label(k))}</span>'
-        f'<span class="val">{v:.0f}/100 &times; {w * 100:.0f}% = <b>{v * w:.1f}</b></span></div>'
-        for k, v, w in rows
-    )
-    return f'<span class="expand-toggle" data-role="expand">why? &#9662;</span><div class="detail-panel">{detail_rows}</div>'
+    return f'<span class="expand-toggle" data-role="expand">why? &#9662;</span><div class="detail-panel">{detail_rows}{other_props}</div>'
 
 
-def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
+def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str, all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None) -> str:
     # bp_model_prob: Ballpark Pal's own independent model, when configured
     # (see edges.py's EdgeCandidate docstring) - "n/a" for 2+ TB and
     # whenever it isn't configured or has no data for this matchup.
@@ -123,9 +264,10 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
     if not e.has_market_data:
         return f"""
           <tr data-player="{_esc(e.player.lower())}" data-book="" data-tier="no_market" data-prob="{e.model_prob}" data-ev="">
-            <td class="player" data-k="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div>{_component_detail_html(e.market, e.components)}</td>
+            <td data-k="verdict">{_verdict_badge(e.has_market_data, e.tier, e.ev_percent_model)}</td>
+            <td class="player" data-k="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div>{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
             <td class="event">{_esc(e.event)}</td><td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>{bp_cell}
-            <td colspan="6" class="wx-cell">no book currently quotes this prop</td>{clr_cells}</tr>"""
+            <td colspan="8" class="wx-cell">no book currently quotes this prop</td>{clr_cells}</tr>"""
     # e.tier (edges.py) is the shared source of truth for this
     # classification - results.py's pick recording uses the same property,
     # so a recorded pick's tier always matches what this page showed for it.
@@ -144,7 +286,8 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str) -> str:
     ev_market_cell = f"{e.ev_percent_market:+.1f}%" if e.ev_percent_market is not None else "n/a"
     return f"""
           <tr data-player="{_esc(e.player.lower())}" data-book="{_esc(e.best_line.sportsbook.lower())}" data-tier="{_esc(e.tier)}" data-prob="{e.model_prob}" data-ev="{e.ev_percent_model}">
-            <td class="player" data-k="player">{_esc(e.player)}{tier}{_component_detail_html(e.market, e.components)}</td>
+            <td data-k="verdict">{_verdict_badge(e.has_market_data, e.tier, e.ev_percent_model)}</td>
+            <td class="player" data-k="player">{_esc(e.player)}{tier}{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
             <td class="event">{_esc(e.event)}</td>
             <td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>
             {bp_cell}
@@ -166,22 +309,23 @@ def _breakeven_cell(breakeven: Optional[int]) -> str:
     return f'<div class="breakeven">beat {breakeven:+d}</div>'
 
 
-def _reco_row(r: RecommendedBet) -> str:
+def _reco_row(r: RecommendedBet, all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None) -> str:
     edge_cell = f"{r.edge_vs_market:+.1%}" if r.edge_vs_market is not None else "n/a"
+    label, css_class = _verdict(True, r.tier, r.ev_percent_model)
     return f"""
       <div class="reco-row">
-        <div><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div>{_component_detail_html(r.market, r.components)}</div>
+        <div><span class="verdict {css_class}" style="margin-right:8px;">{_esc(label)}</span><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div>{_component_detail_html(r.market, r.components, r.player, r.event, all_props_by_player)}</div>
         <div class="event">{_esc(r.event)}</div>
         <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}{_breakeven_cell(r.breakeven)}</div>
-        <div class="prob num">{_fmt_pct(r.model_prob)} model</div>
+        <div class="prob num">{_fmt_pct(r.model_prob)} model<div class="mkt-fair">{_fmt_opt_pct(r.market_fair_prob)} market fair</div></div>
         <div class="edge num {'pos' if r.edge_vs_market is not None and r.edge_vs_market >= 0 else 'neg' if r.edge_vs_market is not None else ''}">{edge_cell}</div>
         <div class="reco-units"><div class="n">{r.units:g}u</div><div class="lbl">size</div></div>
       </div>"""
 
 
-def _reco_group(title: str, hint: str, recs: List[RecommendedBet]) -> str:
+def _reco_group(title: str, hint: str, recs: List[RecommendedBet], all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None) -> str:
     body = (
-        "".join(_reco_row(r) for r in recs)
+        "".join(_reco_row(r, all_props_by_player) for r in recs)
         if recs
         else '<div class="reco-empty">No real plays cleared the bar here right now.</div>'
     )
@@ -193,16 +337,20 @@ def _reco_group(title: str, hint: str, recs: List[RecommendedBet]) -> str:
     </div>"""
 
 
-def _recommended_bets_section(strong: List[RecommendedBet], speculative: List[RecommendedBet]) -> str:
+def _recommended_bets_section(
+    strong: List[RecommendedBet], speculative: List[RecommendedBet], all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None
+) -> str:
     strong_html = _reco_group(
         f"Strong plays ({len(strong)})",
         "Model + market both see real value - our fundamentals and the market's own cross-book pricing agree",
         strong,
+        all_props_by_player,
     )
     speculative_html = _reco_group(
         f"Speculative ({len(speculative)})",
         "Model only, no market confirmation - real edge by our own numbers, but nothing else backs it up. Sized smaller, treat with more scrutiny",
         speculative,
+        all_props_by_player,
     )
     return f"""
   <section class="section" style="margin-top:0;">
@@ -224,7 +372,9 @@ def _recommended_bets_section(strong: List[RecommendedBet], speculative: List[Re
       afford to lose. <b>"beat +N"/"beat -N"</b> under the price is the exact number to check against your actual
       sportsbook right now - every price on this page is a snapshot from whenever this report last ran, so if your
       book's real price is at least that good, the bet is still +EV even though the number shown here has moved;
-      worse than that, it no longer is.
+      worse than that, it no longer is. <b>"market fair"</b> is the real cross-book no-vig consensus - genuinely "n/a"
+      only for Speculative plays, where by definition no second book quotes the other side to de-vig against (see
+      the Speculative hint above); every Strong play always has a real one, since that agreement is what makes it Strong.
     </div>
   </section>"""
 
@@ -282,14 +432,22 @@ def _weight_rows(weights: dict) -> str:
 
 
 def _prop_table(
-    title: str, hint: str, edges: List[EdgeCandidate], prob_header: str, top: int, heat_by_player: Dict[str, HeatIndex], kind: str, table_id: str
+    title: str,
+    hint: str,
+    edges: List[EdgeCandidate],
+    prob_header: str,
+    top: int,
+    heat_by_player: Dict[str, HeatIndex],
+    kind: str,
+    table_id: str,
+    all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None,
 ) -> str:
     if not edges:
         return f"""
     <div class="section-head"><h2>{_esc(title)}</h2><span class="hint">{_esc(hint)}</span></div>
     <div class="empty">No candidates scored for this slate.</div>"""
     shown = edges[:top]
-    rows = "".join(_prop_row(e, heat_by_player.get(e.player), kind) for e in shown)
+    rows = "".join(_prop_row(e, heat_by_player.get(e.player), kind, all_props_by_player) for e in shown)
     # Real books actually seen in this table, for the filter dropdown - never
     # a fixed list (a book with zero real prices tonight shouldn't appear as
     # a selectable, always-empty filter option).
@@ -312,6 +470,7 @@ def _prop_table(
     <div class="table-scroll">
       <table class="props sortable" id="{table_id}-table">
         <thead><tr>
+          <th data-k="verdict">Verdict<span class="arrow">▾</span></th>
           <th data-k="player">Player<span class="arrow">▾</span></th><th>Matchup</th>
           <th data-k="prob">{_esc(prob_header)}<span class="arrow">▾</span></th><th>BP Model</th>
           <th data-k="price">Best price<span class="arrow">▾</span></th><th data-k="book">Book<span class="arrow">▾</span></th>
@@ -339,6 +498,17 @@ def render_html_report(
     tb = report.tb_edges
     hits = report.hits_edges
     heat_by_player = heat_lookup(hot)
+
+    # Two real, already-scored-candidate lookups, shared by every "click to
+    # see more" feature below (game cards, prop-table/reco-row "why?"
+    # panels) - built once here rather than per-row, from data this
+    # project already computed this run.
+    all_candidates = hr + tb + hits
+    candidates_by_event: Dict[str, List[EdgeCandidate]] = {}
+    all_props_by_player: Dict[str, List[EdgeCandidate]] = {}
+    for c in all_candidates:
+        candidates_by_event.setdefault(c.event, []).append(c)
+        all_props_by_player.setdefault(c.player.strip().lower(), []).append(c)
 
     top_hr = next((e for e in hr if e.has_market_data), hr[0] if hr else None)
     top_tb = next((e for e in tb if e.has_market_data), tb[0] if tb else None)
@@ -381,7 +551,10 @@ def render_html_report(
         else "Statcast (pybaseball), MLB Stats API, Open-Meteo, and Betstamp odds fetched fresh this run - nothing cached."
     )
 
-    env_cards = "\n".join(_env_card(env, i + 1) for i, env in enumerate(envs[:10]))
+    env_cards = "\n".join(
+        _env_card(env, i + 1, candidates_by_event.get(f"{env.matchup.away_team} @ {env.matchup.home_team}", []))
+        for i, env in enumerate(envs[:10])
+    )
     hot_rows = "\n".join(_hot_row(i + 1, h) for i, h in enumerate(hot[:10]))
 
     return f"""<!doctype html>
@@ -416,7 +589,7 @@ def render_html_report(
     <span class="detail">{status_detail}</span>
   </div>
 
-  {_recommended_bets_section(strong_recs, speculative_recs)}
+  {_recommended_bets_section(strong_recs, speculative_recs, all_props_by_player)}
 
   {_live_bets_section(live_bets or [])}
 
@@ -444,15 +617,15 @@ def render_html_report(
   </section>
 
   <section class="section">
-    {_prop_table("Best home run props", 'Ranked by our model’s EV% against the best live price - "agree" = model & market both see value', hr, "Model P(HR)", top, heat_by_player, "hr", "hr")}
+    {_prop_table("Best home run props", 'Ranked by our model’s EV% against the best live price - "agree" = model & market both see value', hr, "Model P(HR)", top, heat_by_player, "hr", "hr", all_props_by_player)}
   </section>
 
   <section class="section">
-    {_prop_table("Best 2+ total bases props", "Ranked by our model's EV% against the best live price", tb, "Model P(2+ TB)", top, heat_by_player, "tb2", "tb")}
+    {_prop_table("Best 2+ total bases props", "Ranked by our model's EV% against the best live price", tb, "Model P(2+ TB)", top, heat_by_player, "tb2", "tb", all_props_by_player)}
   </section>
 
   <section class="section">
-    {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price", hits, "Model P(1+ Hits)", top, heat_by_player, "hit", "hits")}
+    {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price", hits, "Model P(1+ Hits)", top, heat_by_player, "hit", "hits", all_props_by_player)}
   </section>
 
   <section class="section">

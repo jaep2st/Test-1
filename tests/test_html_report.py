@@ -89,6 +89,154 @@ def test_html_report_escapes_player_names_safely():
     assert "&lt;script&gt;" in row_html
 
 
+def test_verdict_matches_the_real_recommended_bets_classification():
+    from mlb_props.betting import MIN_EV_PERCENT_TO_RECOMMEND
+    from mlb_props.html_report import _verdict
+
+    # Exactly the same real bar/tier logic that decides Recommended Bets
+    # membership - the verdict must never disagree with it.
+    assert _verdict(False, "no_market", None) == ("NO PRICE YET", "verdict-none")
+    assert _verdict(True, "model_only", None) == ("PASS", "verdict-pass")
+    assert _verdict(True, "model_only", MIN_EV_PERCENT_TO_RECOMMEND - 0.1) == ("PASS", "verdict-pass")
+    assert _verdict(True, "model_only", MIN_EV_PERCENT_TO_RECOMMEND) == ("SPECULATIVE", "verdict-speculative")
+    assert _verdict(True, "agree", MIN_EV_PERCENT_TO_RECOMMEND) == ("STRONG BET", "verdict-strong")
+
+
+def test_html_report_prop_tables_show_a_verdict_badge():
+    html_text = render_html_report(_report())
+    assert 'data-k="verdict"' in html_text
+    assert "verdict-strong" in html_text or "verdict-speculative" in html_text
+
+
+def test_html_report_recommended_bets_show_the_real_market_fair_value():
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _reco_row
+
+    r = RecommendedBet(
+        player="Player A", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+        tier="agree", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=10.0,
+        best_price=200, best_book="draftkings", books_quoting=2, units=1.0, full_kelly_percent=4.0, breakeven=400,
+    )
+    row_html = _reco_row(r)
+    assert "15.0% market fair" in row_html
+    assert "verdict-strong" in row_html
+
+
+def _candidate(player, market, event, ev_percent_model=6.0, has_market=True, best_price=150, book="draftkings"):
+    from mlb_props.edges import EdgeCandidate
+    from odds_monitor.models import PropLine
+
+    best_line = PropLine(player=player, team=None, league="mlb", market=market, side="yes", line=0.5, odds=best_price, sportsbook=book, event=event) if has_market else None
+    return EdgeCandidate(
+        player=player, market=market, event=event, model_score=70.0, model_prob=0.15, market_fair_prob=0.12,
+        best_line=best_line, ev_percent_model=ev_percent_model if has_market else None, ev_percent_market=None,
+        edge_vs_market=None, price_spread_percent=None, books_quoting=2 if has_market else 0, park="Test Park",
+        wind_out_mph=0.0, temp_f=70.0, is_dome=False, weather_boost_pct=0.0,
+    )
+
+
+def test_other_props_html_lists_a_players_other_real_candidates():
+    from mlb_props.html_report import _other_props_html
+
+    hr = _candidate("Player A", "batter_home_runs", "Team A @ Team B")
+    tb = _candidate("Player A", "batter_total_bases", "Team A @ Team B")
+    lookup = {"player a": [hr, tb]}
+    html_text = _other_props_html("Player A", "batter_home_runs", "Team A @ Team B", lookup)
+    assert "Also scored tonight" in html_text
+    assert "2+ TB" in html_text
+    # Must not list itself back.
+    assert html_text.count("Team A @ Team B") == 1
+
+
+def test_other_props_html_is_empty_with_no_other_real_candidates():
+    from mlb_props.html_report import _other_props_html
+
+    hr = _candidate("Player A", "batter_home_runs", "Team A @ Team B")
+    lookup = {"player a": [hr]}
+    assert _other_props_html("Player A", "batter_home_runs", "Team A @ Team B", lookup) == ""
+    assert _other_props_html("Player A", "batter_home_runs", "Team A @ Team B", None) == ""
+
+
+def test_component_detail_html_includes_other_props_section_when_present():
+    from mlb_props.html_report import _component_detail_html
+
+    hr = _candidate("Player A", "batter_home_runs", "Team A @ Team B")
+    hits = _candidate("Player A", "batter_hits", "Team A @ Team B")
+    lookup = {"player a": [hr, hits]}
+    html_text = _component_detail_html("batter_home_runs", {}, "Player A", "Team A @ Team B", lookup)
+    # No real components recorded, but a real other-market candidate exists -
+    # the toggle must still render for that reason alone.
+    assert "expand-toggle" in html_text
+    assert "Also scored tonight" in html_text
+
+
+def test_html_report_shows_cross_market_props_for_a_real_player():
+    # The mock fixture scores every batter across all three markets, so a
+    # real cross-market "Also scored tonight" section should genuinely
+    # appear somewhere on the page.
+    html_text = render_html_report(_report())
+    assert "Also scored tonight" in html_text
+
+
+def test_fmt_start_time_et_converts_real_utc_to_us_eastern():
+    from mlb_props.html_report import _fmt_start_time_et
+
+    # 23:10 UTC on a summer date is EDT (UTC-4) - 7:10 PM ET.
+    assert _fmt_start_time_et("2026-08-20T23:10:00Z") == "7:10 PM ET"
+
+
+def test_fmt_start_time_et_is_tbd_for_missing_or_malformed():
+    from mlb_props.html_report import _fmt_start_time_et
+
+    assert _fmt_start_time_et(None) == "TBD"
+    assert _fmt_start_time_et("") == "TBD"
+    assert _fmt_start_time_et("not a real timestamp") == "TBD"
+
+
+def test_html_report_env_cards_show_a_real_game_roster_and_start_time():
+    from mlb_props.edges import EdgeCandidate
+    from mlb_props.html_report import _env_card
+    from mlb_props.pipeline import MatchupEnvironment
+    from mlb_props.schedule import ProbableMatchup
+
+    matchup = ProbableMatchup(
+        away_team="Team A", home_team="Team B", venue="Test Park",
+        away_pitcher="Pitcher A", home_pitcher="Pitcher B",
+        game_time_utc="2026-08-20T23:10:00Z", status="Pre-Game",
+    )
+    env = MatchupEnvironment(
+        matchup=matchup, park_hr_factor=100.0, weather_boost_pct=2.0,
+        away_pitcher_vulnerability=None, home_pitcher_vulnerability=None, environment_score=60.0,
+    )
+    candidate = EdgeCandidate(
+        player="Slugger One", market="batter_home_runs", event="Team A @ Team B", model_score=70.0,
+        model_prob=0.15, market_fair_prob=0.12, best_line=None, ev_percent_model=6.0, ev_percent_market=None,
+        edge_vs_market=None, price_spread_percent=None, books_quoting=0, park="Test Park", wind_out_mph=0.0,
+        temp_f=70.0, is_dome=False, weather_boost_pct=2.0,
+    )
+    html_text = _env_card(env, 1, [candidate])
+    assert "7:10 PM ET" in html_text
+    assert "Pre-Game" in html_text
+    assert "Slugger One" in html_text
+    assert "1+ HR" in html_text
+    assert "expand-toggle" in html_text
+
+
+def test_html_report_recommended_bets_market_fair_is_honestly_na_when_absent():
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _reco_row
+
+    r = RecommendedBet(
+        player="Player B", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+        tier="model_only_single_sided", model_prob=0.20, market_fair_prob=None, edge_vs_market=None,
+        ev_percent_model=10.0, best_price=200, best_book="draftkings", books_quoting=1, units=1.0,
+        full_kelly_percent=4.0, breakeven=400,
+    )
+    row_html = _reco_row(r)
+    assert "n/a market fair" in row_html
+    assert "verdict-speculative" in row_html
+
+
 def test_html_report_shows_recommended_bets_with_real_units():
     from mlb_props.betting import build_recommended_bets
 
