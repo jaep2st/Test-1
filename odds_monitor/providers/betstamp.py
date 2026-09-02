@@ -161,6 +161,27 @@ class BetstampProvider(OddsProvider):
         payload = response.json()
         raw_markets = payload.get("markets", payload) if isinstance(payload, dict) else payload
 
+        # Real ground truth on the actual response shape, logged
+        # unconditionally (not just on a parse failure) - see this module's
+        # docstring ("NOTE ON FIELD NAMES"): the field names below were
+        # never confirmed against a real response, so this is what actually
+        # resolves that gap the first time this runs against a real key,
+        # the same way theoddsapi.py logs its own raw bookmaker keys before
+        # any filtering/parsing.
+        logger.info(
+            "Betstamp API: top-level payload keys=%s, %d raw market entr%s returned",
+            sorted(payload.keys()) if isinstance(payload, dict) else "(payload is not a dict)",
+            len(raw_markets) if hasattr(raw_markets, "__len__") else -1,
+            "y" if (hasattr(raw_markets, "__len__") and len(raw_markets) == 1) else "ies",
+        )
+        if raw_markets:
+            sample = raw_markets[0]
+            logger.info(
+                "Betstamp API: sample raw market entry keys=%s, full entry=%r",
+                sorted(sample.keys()) if isinstance(sample, dict) else type(sample).__name__,
+                sample,
+            )
+
         lines: List[PropLine] = []
         for raw in raw_markets:
             try:

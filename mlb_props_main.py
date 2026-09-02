@@ -306,6 +306,37 @@ def run_ballparkpal_matchups_check(game_date: date, api_key: str) -> str:
     return "\n".join(out)
 
 
+def run_betstamp_diagnostic(api_key: str, books: Optional[List[str]]) -> str:
+    """Standalone diagnostic for `--betstamp-diagnostic`: calls Betstamp's
+    real `/api/markets` endpoint (see odds_monitor/providers/betstamp.py's
+    module docstring - its required query-param values and per-market
+    field names were educated guesses, never confirmed against a real
+    response) and reports how many real PropLines actually parsed.
+
+    The real payload shape (top-level keys, a full sample market entry) is
+    logged unconditionally by BetstampProvider itself now (INFO level) -
+    that's what actually resolves the guesses in `_FIELD_ALIASES`, not
+    this function's return value. Run with `--log-level DEBUG` (or the
+    default, which already shows INFO) and read those log lines; a 400
+    response's real validation-error body is logged too (WARNING level),
+    which is what nails down the still-unconfirmed `periods`/`bet_types`/
+    `prop_types` enum values if the request is rejected outright.
+    """
+    provider = BetstampProvider(api_key=api_key, book_ids=books)
+    lines = provider.fetch_player_props("mlb")
+    out = ["BETSTAMP DIAGNOSTIC", ""]
+    out.append(f"{len(lines)} real PropLine(s) successfully parsed - see the INFO/WARNING logs above for the real response shape.")
+    if lines:
+        out.append("")
+        out.append("Sample parsed lines:")
+        for line in lines[:15]:
+            out.append(f"  - {line.player} {line.market} {line.side} {line.line} @ {line.odds} ({line.sportsbook}) - {line.event}")
+        books_seen = sorted({line.sportsbook for line in lines})
+        out.append("")
+        out.append(f"Real sportsbooks seen in successfully-parsed lines: {books_seen}")
+    return "\n".join(out)
+
+
 def run_name_lookup_check(names: List[str], year: int) -> str:
     """Standalone diagnostic for `--name-lookup-check`: looks up each given
     player name directly against the real, live Baseball Savant leaderboard
@@ -511,6 +542,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "Diagnostic only - see mlb_props/ballparkpal.py for why this endpoint isn't used in scoring yet.",
     )
     parser.add_argument(
+        "--betstamp-diagnostic",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead call Betstamp's real /api/markets "
+        "endpoint directly and report how many real PropLines parsed - see odds_monitor/providers/betstamp.py's "
+        "module docstring: its required query-param values and per-market field names were educated guesses, "
+        "never confirmed against a real response. Requires --api-key/BETSTAMP_API_KEY. Diagnostic only - read "
+        "the accompanying INFO/WARNING logs for the real response shape.",
+    )
+    parser.add_argument(
         "--name-lookup-check",
         action="store_true",
         help="Skip the normal model/report pipeline entirely and instead look up each --batters name directly "
@@ -608,6 +648,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             with open(args.out, "w") as f:
                 f.write(text + "\n")
             logger.info("Wrote Ballpark Pal matchups check to %s", args.out)
+        return 0
+
+    if args.betstamp_diagnostic:
+        betstamp_key = args.api_key or os.environ.get("BETSTAMP_API_KEY")
+        if not betstamp_key:
+            print("Configuration error: --betstamp-diagnostic requires --api-key or BETSTAMP_API_KEY.", file=sys.stderr)
+            return 2
+        text = run_betstamp_diagnostic(betstamp_key, args.books)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote Betstamp diagnostic to %s", args.out)
         return 0
 
     if args.live_odds_scan:
