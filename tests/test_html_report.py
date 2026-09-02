@@ -1,3 +1,4 @@
+import re
 from datetime import date
 
 from mlb_props.context import MockParkWeatherProvider
@@ -180,6 +181,34 @@ def test_html_report_prop_rows_show_colored_rating_chips():
     assert strong  # a real +EV pick, so the EV/edge chips below have a real value to render
     html_text = render_html_report(report)
     assert "rate-chip" in html_text
+
+
+def test_html_report_prop_tables_default_to_a_compact_view():
+    from mlb_props.html_report import _prop_row
+    from mlb_props.betting import build_recommended_bets
+
+    report = _report()
+    strong, _ = build_recommended_bets(report)
+    assert strong  # a real row with market data, so every secondary column below has a real cell to check
+    row_html = _prop_row(next(e for e in report.hr_edges if e.has_market_data), None, "hr")
+    for secondary_key in ("fair", "edge", "evmarket", "books", "weather", "l15", "season"):
+        cell = re.search(rf'<td class="([^"]*)" data-k="{secondary_key}"', row_html)
+        assert cell and "secondary-col" in cell.group(1), f"{secondary_key} isn't marked as a secondary (collapsible) column"
+
+    html_text = render_html_report(report)
+    toggle_idx = html_text.index('class="view-toggle"')
+    toggle_tag = html_text[html_text.rindex("<input", 0, toggle_idx) : html_text.index(">", toggle_idx)]
+    assert "checked" not in toggle_tag  # unchecked = compact is the default state on page load
+
+
+def test_html_report_secondary_columns_stay_reachable_via_full_detail():
+    # Every "secondary" column is still real, present markup - just
+    # display:none until the checkbox is checked (input.view-toggle:checked
+    # ~ .table-scroll .secondary-col in site_style.py) - nothing is
+    # actually removed from the page.
+    html_text = render_html_report(_report())
+    assert "input.view-toggle:checked ~ .table-scroll .secondary-col" in html_text
+    assert "Show full detail" in html_text
 
 
 def test_html_report_prop_tables_show_a_verdict_badge():
