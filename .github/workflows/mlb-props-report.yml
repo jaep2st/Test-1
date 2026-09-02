@@ -75,6 +75,19 @@ on:
         type: boolean
         required: false
         default: false
+      historical_backtest_hot_streak:
+        description: "Also run --historical-backtest-hot-streak over --backtest-start-date/--backtest-end-date (diagnostic: backtests the hot/cold z-score + clearance-rate signal against real past MLB games, the one part of the model checkable against history without lookahead bias - see mlb_props/historical_backtest.py. Printed to this job's log, not the published report)."
+        type: boolean
+        required: false
+        default: false
+      backtest_start_date:
+        description: "First real date (YYYY-MM-DD) for --historical-backtest-hot-streak."
+        required: false
+        default: ""
+      backtest_end_date:
+        description: "Last real date (YYYY-MM-DD, inclusive) for --historical-backtest-hot-streak."
+        required: false
+        default: ""
       name_lookup_check:
         description: "Space-separated player full names (e.g. 'Gunnar Henderson' 'Pete Alonso' - quote each name) to check directly against the real Baseball Savant leaderboard, isolated from the rest of the pipeline. Leave blank to skip. Printed to this job's log, not the published report."
         required: false
@@ -271,6 +284,14 @@ jobs:
           BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
         run: |
           python mlb_props_main.py --betstamp-diagnostic --log-level DEBUG
+
+      - name: Backtest the hot-streak signal against real MLB history
+        if: ${{ inputs.historical_backtest_hot_streak }}
+        run: |
+          python mlb_props_main.py --historical-backtest-hot-streak \
+            --backtest-start-date "${{ inputs.backtest_start_date }}" \
+            --backtest-end-date "${{ inputs.backtest_end_date }}" \
+            --log-level DEBUG
 
       - name: Check specific player names against the real Savant leaderboard
         if: ${{ inputs.name_lookup_check != '' }}

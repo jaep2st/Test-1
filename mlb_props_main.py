@@ -29,7 +29,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Sequence
 from zoneinfo import ZoneInfo
 
@@ -337,6 +337,32 @@ def run_betstamp_diagnostic(api_key: str, books: Optional[List[str]]) -> str:
     return "\n".join(out)
 
 
+def run_historical_hot_streak_backtest(start_date: date, end_date: date) -> str:
+    """Standalone diagnostic for `--historical-backtest-hot-streak`: the
+    one piece of this project's model that can be checked against real
+    MLB history without lookahead risk - see mlb_props/
+    historical_backtest.py's module docstring for exactly why the rest of
+    the model (barrel%, xwOBA, etc.) can't be backtested this way yet.
+    Requires `pip install pybaseball pandas` and real network access.
+    """
+    import pybaseball as pyb
+
+    from mlb_props.historical_backtest import collect_hot_streak_observations, summarize_hot_streak_backtest
+
+    game_dates = []
+    d = start_date
+    while d <= end_date:
+        game_dates.append(d)
+        d += timedelta(days=1)
+
+    schedule = MlbStatsApiScheduleProvider(include_rosters=False)
+    hot_streak = StatcastHotStreakProvider(season_start=date(start_date.year, 3, 1))
+    session = build_retrying_session()
+
+    observations = collect_hot_streak_observations(schedule, hot_streak, pyb, session, game_dates)
+    return summarize_hot_streak_backtest(observations)
+
+
 def run_name_lookup_check(names: List[str], year: int) -> str:
     """Standalone diagnostic for `--name-lookup-check`: looks up each given
     player name directly against the real, live Baseball Savant leaderboard
@@ -551,6 +577,27 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "the accompanying INFO/WARNING logs for the real response shape.",
     )
     parser.add_argument(
+        "--historical-backtest-hot-streak",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead backtest the hot/cold z-score and "
+        "clearance-rate signal (hot_streak.StatcastHotStreakProvider) against real past MLB games - the one "
+        "part of the model that can be checked against history without lookahead bias (see "
+        "mlb_props/historical_backtest.py's module docstring for why the rest of the model can't be, yet). "
+        "Requires --backtest-start-date and --backtest-end-date, and `pip install pybaseball pandas`.",
+    )
+    parser.add_argument(
+        "--backtest-start-date",
+        type=_parse_date,
+        default=None,
+        help="First real date (YYYY-MM-DD) to include in --historical-backtest-hot-streak.",
+    )
+    parser.add_argument(
+        "--backtest-end-date",
+        type=_parse_date,
+        default=None,
+        help="Last real date (YYYY-MM-DD, inclusive) to include in --historical-backtest-hot-streak.",
+    )
+    parser.add_argument(
         "--name-lookup-check",
         action="store_true",
         help="Skip the normal model/report pipeline entirely and instead look up each --batters name directly "
@@ -661,6 +708,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             with open(args.out, "w") as f:
                 f.write(text + "\n")
             logger.info("Wrote Betstamp diagnostic to %s", args.out)
+        return 0
+
+    if args.historical_backtest_hot_streak:
+        if not args.backtest_start_date or not args.backtest_end_date:
+            print(
+                "Configuration error: --historical-backtest-hot-streak requires --backtest-start-date and "
+                "--backtest-end-date.",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            import pybaseball  # noqa: F401
+        except ImportError:
+            print("Configuration error: --historical-backtest-hot-streak requires `pip install pybaseball pandas`.", file=sys.stderr)
+            return 2
+        text = run_historical_hot_streak_backtest(args.backtest_start_date, args.backtest_end_date)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote historical hot-streak backtest to %s", args.out)
         return 0
 
     if args.live_odds_scan:

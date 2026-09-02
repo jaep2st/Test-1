@@ -46,6 +46,15 @@ class ProbableMatchup:
     # own list via cli --batters.
     away_batters: List[str] = field(default_factory=list)
     home_batters: List[str] = field(default_factory=list)
+    # MLB Stats API's own real per-game ID - unused by the live pipeline
+    # (which never needs to look a specific game back up), but the one
+    # stable key into other real per-game MLB Stats API endpoints (e.g.
+    # the boxscore endpoint mlb_props/historical_backtest.py uses to find
+    # who actually batted in a specific past game - a schedule/roster
+    # lookup alone can't answer that for a date that isn't today, since
+    # away_batters/home_batters above are today's active roster, not a
+    # historical one). `None` for MockScheduleProvider's synthetic slate.
+    game_pk: Optional[int] = None
 
 
 class ScheduleProvider(ABC):
@@ -123,6 +132,7 @@ class MlbStatsApiScheduleProvider(ScheduleProvider):
                             home_batters=self._active_position_players(home_team_id)[: self.max_batters_per_team]
                             if self.include_rosters
                             else [],
+                            game_pk=game.get("gamePk"),
                         )
                     )
                 except (KeyError, TypeError):
