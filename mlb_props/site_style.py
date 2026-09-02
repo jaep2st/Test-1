@@ -148,6 +148,26 @@ footer p{ max-width:80ch; margin:0 0 8px; }
 .site-nav a{ text-decoration:none; font-size:13.5px; font-weight:600; color:var(--ink-muted); padding:7px 14px; border-radius:20px; border:1px solid var(--border); background:var(--surface); }
 .site-nav a.active{ color:var(--bg); background:var(--ink); border-color:var(--ink); }
 
+/* --- Quick-nav: jump straight to a section instead of scrolling past
+   everything above it - the page has gotten long, this is the fix that
+   doesn't require deleting anything. --- */
+.quick-nav{ position:sticky; top:0; z-index:6; display:flex; gap:7px; flex-wrap:wrap; padding:10px 0; margin-bottom:24px; background:var(--bg); border-bottom:1px solid var(--border); }
+.quick-nav a{ text-decoration:none; font-size:12.5px; font-weight:600; color:var(--ink-muted); padding:6px 12px; border-radius:20px; border:1px solid var(--border); background:var(--surface); white-space:nowrap; }
+.quick-nav a:hover{ color:var(--ink); border-color:var(--ink-muted); }
+
+/* --- Collapsible sections (native <details>, no JS needed): reference
+   material that isn't itself a bet to place - environments, hot-batter
+   leaderboard, model methodology - defaults closed so the page opens on
+   what matters (the picks), full detail always one click away. --- */
+details.section{ margin-top:44px; }
+.collapse-head{ display:flex; align-items:baseline; gap:16px; cursor:pointer; list-style:none; }
+.collapse-head::-webkit-details-marker{ display:none; }
+.collapse-head h2{ font-size:24px; font-weight:700; letter-spacing:.01em; margin-right:auto; }
+.collapse-head .hint{ font-size:12.5px; color:var(--ink-muted); text-transform:uppercase; letter-spacing:.08em; }
+.collapse-head .details-arrow{ color:var(--accent); font-size:13px; flex:none; transition:transform .15s; }
+details[open] > .collapse-head .details-arrow{ transform:rotate(180deg); }
+details.section > *:not(.collapse-head){ margin-top:14px; }
+
 /* --- Performance dashboard: filters + sortable tables --- */
 .filter-bar{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
 .filter-bar input[type="search"], .filter-bar select{
@@ -217,6 +237,10 @@ table.props tbody tr:hover td:first-child, table.props tbody tr:hover td.player{
 .reco-units .n{ font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-weight:700; font-size:17px; color:var(--accent-strong); }
 .reco-units .lbl{ font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-muted); }
 .reco-empty{ padding:16px 18px; color:var(--ink-muted); font-size:13.5px; background:var(--surface); border:1px solid var(--border); border-radius:10px; }
+.reco-more summary{ cursor:pointer; list-style:none; padding:12px 18px; font-size:12.5px; font-weight:600; color:var(--info); }
+.reco-more summary::-webkit-details-marker{ display:none; }
+.reco-more summary:hover{ text-decoration:underline; }
+.reco-more[open] summary{ border-bottom:1px solid var(--border); }
 .reco-disclosure{ font-size:12.5px; color:var(--ink-muted); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin-top:16px; }
 .reco-disclosure b{ color:var(--ink); }
 @media (max-width:760px){
