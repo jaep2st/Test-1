@@ -332,7 +332,7 @@ def _prop_row(
     # bp_model_prob: Ballpark Pal's own independent model, when configured
     # (see edges.py's EdgeCandidate docstring) - "n/a" for 2+ TB and
     # whenever it isn't configured or has no data for this matchup.
-    bp_cell = f'<td class="num">{_fmt_opt_pct(e.bp_model_prob)}</td>'
+    bp_cell = f'<td class="num secondary-col">{_fmt_opt_pct(e.bp_model_prob)}</td>'
     # clearance_cols (from report.py, shared with the console report so the
     # two never drift): (L15 literal count, season rate) - see its
     # docstring for why L5/L10 aren't shown here either. clearance_rates is
@@ -346,7 +346,7 @@ def _prop_row(
     season_data = "" if season_rate is None else f"{season_rate:.4f}"
     l15_chip = _chip(l15, _rate_bucket(l15_rate, l15_cuts or []))
     season_chip = _chip(szn, _rate_bucket(season_rate, season_cuts or []))
-    clr_cells = f'<td class="num" data-k="l15">{l15_chip}</td><td class="num" data-k="season">{season_chip}</td>'
+    clr_cells = f'<td class="num secondary-col" data-k="l15">{l15_chip}</td><td class="num secondary-col" data-k="season">{season_chip}</td>'
     verdict_rank = _VERDICT_RANK[_verdict(e.has_market_data, e.tier, e.ev_percent_model)[0]]
     if not e.has_market_data:
         return f"""
@@ -355,8 +355,10 @@ def _prop_row(
               data-l15="{l15_data}" data-season="{season_data}">
             <td data-k="verdict">{_verdict_badge(e.has_market_data, e.tier, e.ev_percent_model)}</td>
             <td class="player" data-k="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div>{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
-            <td class="event">{_esc(e.event)}</td><td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>{bp_cell}
-            <td colspan="8" class="wx-cell">no book currently quotes this prop</td>{clr_cells}</tr>"""
+            <td class="event secondary-col">{_esc(e.event)}</td><td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>{bp_cell}
+            <td colspan="3" class="wx-cell">no book currently quotes this prop</td>
+            <td colspan="5" class="secondary-col"></td>
+            {clr_cells}</tr>"""
     # e.tier (edges.py) is the shared source of truth for this
     # classification - results.py's pick recording uses the same property,
     # so a recorded pick's tier always matches what this page showed for it.
@@ -384,17 +386,17 @@ def _prop_row(
               data-books="{e.books_quoting}" data-weather="{e.weather_boost_pct}" data-l15="{l15_data}" data-season="{season_data}">
             <td data-k="verdict">{_verdict_badge(e.has_market_data, e.tier, e.ev_percent_model)}</td>
             <td class="player" data-k="player">{_esc(e.player)}{tier}{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
-            <td class="event">{_esc(e.event)}</td>
+            <td class="event secondary-col">{_esc(e.event)}</td>
             <td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>
             {bp_cell}
             <td class="num pos" data-k="price">{e.best_line.odds:+d}</td>
             <td class="book" data-k="book">{_esc(e.best_line.sportsbook)}</td>
-            <td class="num" data-k="fair">{_fmt_opt_pct(e.market_fair_prob)}</td>
-            <td class="num" data-k="edge">{edge_chip}</td>
+            <td class="num secondary-col" data-k="fair">{_fmt_opt_pct(e.market_fair_prob)}</td>
+            <td class="num secondary-col" data-k="edge">{edge_chip}</td>
             <td class="num" data-k="ev">{ev_chip}</td>
-            <td class="num {'pos' if e.ev_percent_market is not None and e.ev_percent_market >= 0 else 'neg' if e.ev_percent_market is not None else ''}" data-k="evmarket">{ev_market_cell}</td>
-            <td class="num" data-k="books">{e.books_quoting}</td>
-            <td class="wx-cell" data-k="weather">{wind}, {temp} <b>{e.weather_boost_pct:+.1f}%</b></td>
+            <td class="num secondary-col {'pos' if e.ev_percent_market is not None and e.ev_percent_market >= 0 else 'neg' if e.ev_percent_market is not None else ''}" data-k="evmarket">{ev_market_cell}</td>
+            <td class="num secondary-col" data-k="books">{e.books_quoting}</td>
+            <td class="wx-cell secondary-col" data-k="weather">{wind}, {temp} <b>{e.weather_boost_pct:+.1f}%</b></td>
             {clr_cells}
           </tr>"""
 
@@ -590,18 +592,20 @@ def _prop_table(
       </select>
       <span class="filter-count" id="{table_id}-count"></span>
     </div>
+    <input type="checkbox" class="view-toggle" id="{table_id}-full">
+    <label class="view-toggle-wrap" for="{table_id}-full">Show full detail (matchup, BP model, market fair, edge, EV vs market, books, weather, clearance history)</label>
     <div class="table-scroll">
       <table class="props sortable" id="{table_id}-table">
         <thead><tr>
           <th data-k="verdict">Verdict<span class="arrow">▾</span></th>
-          <th data-k="player">Player<span class="arrow">▾</span></th><th>Matchup</th>
-          <th data-k="prob">{_esc(prob_header)}<span class="arrow">▾</span></th><th>BP Model</th>
+          <th data-k="player">Player<span class="arrow">▾</span></th><th class="secondary-col">Matchup</th>
+          <th data-k="prob">{_esc(prob_header)}<span class="arrow">▾</span></th><th class="secondary-col">BP Model</th>
           <th data-k="price">Best price<span class="arrow">▾</span></th><th data-k="book">Book<span class="arrow">▾</span></th>
-          <th data-k="fair">Market fair<span class="arrow">▾</span></th><th data-k="edge">Edge<span class="arrow">▾</span></th>
-          <th data-k="ev">EV (model)<span class="arrow">▾</span></th><th data-k="evmarket">EV (market)<span class="arrow">▾</span></th>
-          <th data-k="books">Books<span class="arrow">▾</span></th><th data-k="weather">Weather<span class="arrow">▾</span></th>
-          <th data-k="l15" title="Real games this player actually cleared this line, out of the last 15 games played">L15 clear<span class="arrow">▾</span></th>
-          <th data-k="season" title="Same real clearance rate over the full season - the baseline to judge L15 clear against">Season rate<span class="arrow">▾</span></th>
+          <th class="secondary-col" data-k="fair">Market fair<span class="arrow">▾</span></th><th class="secondary-col" data-k="edge">Edge<span class="arrow">▾</span></th>
+          <th data-k="ev">EV (model)<span class="arrow">▾</span></th><th class="secondary-col" data-k="evmarket">EV (market)<span class="arrow">▾</span></th>
+          <th class="secondary-col" data-k="books">Books<span class="arrow">▾</span></th><th class="secondary-col" data-k="weather">Weather<span class="arrow">▾</span></th>
+          <th class="secondary-col" data-k="l15" title="Real games this player actually cleared this line, out of the last 15 games played">L15 clear<span class="arrow">▾</span></th>
+          <th class="secondary-col" data-k="season" title="Same real clearance rate over the full season - the baseline to judge L15 clear against">Season rate<span class="arrow">▾</span></th>
         </tr></thead>
         <tbody id="{table_id}-tbody">{rows}
         </tbody>

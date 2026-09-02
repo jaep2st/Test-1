@@ -208,6 +208,15 @@ table.props tbody tr:hover td:first-child, table.props tbody tr:hover td.player{
   table.props thead th, table.props tbody td{ padding:8px 9px; }
 }
 
+/* --- Compact view (default): Verdict/Player/Model%/Price/Book/EV only -
+   the same minimal, single-screen table feel as a prop-rating site,
+   without losing any real column - every one of them is still there,
+   one checkbox away via "Show full detail". Pure CSS, no JS needed. */
+input.view-toggle{ accent-color:var(--accent); width:15px; height:15px; vertical-align:middle; cursor:pointer; }
+label.view-toggle-wrap{ display:inline-block; font-size:12.5px; font-weight:600; color:var(--ink-muted); cursor:pointer; margin:0 0 12px 8px; vertical-align:middle; }
+table.props .secondary-col{ display:none; }
+input.view-toggle:checked ~ .table-scroll .secondary-col{ display:table-cell; }
+
 /* --- Calibration chart --- */
 .calib-wrap{ background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 20px 10px; box-shadow:var(--shadow); }
 .calib-legend{ display:flex; gap:18px; font-size:12.5px; color:var(--ink-muted); margin-bottom:8px; flex-wrap:wrap; }
