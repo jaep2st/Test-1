@@ -172,6 +172,76 @@ def _verdict_badge(has_market_data: bool, tier: str, ev_percent_model: Optional[
     return f'<span class="verdict {css_class}">{_esc(label)}</span>'
 
 
+# --- Ballpark-Pal-style colored rating chips -------------------------------
+# A quick "how good is this number" visual signal on the columns that matter
+# most for spotting a real bet (green = best, red = worst, 5 steps) - the
+# same colored-badge idea used by prop-rating sites, applied to this
+# project's own already-computed numbers. Every bucket boundary below is
+# either a real threshold this project already uses elsewhere
+# (MIN_EV_PERCENT_TO_RECOMMEND) or this table's own real spread of values
+# (for the clearance-rate columns, since a 20% clearance rate means
+# something very different for 2+ TB than for 1+ Hits, so a fixed scale
+# would mislead across markets) - never an arbitrary made-up cutoff.
+
+
+def _ev_bucket(ev: Optional[float]) -> Optional[int]:
+    if ev is None:
+        return None
+    if ev >= 10.0:
+        return 4
+    if ev >= MIN_EV_PERCENT_TO_RECOMMEND:
+        return 3
+    if ev >= 0.0:
+        return 2
+    if ev >= -10.0:
+        return 1
+    return 0
+
+
+def _edge_bucket(edge: Optional[float]) -> Optional[int]:
+    if edge is None:
+        return None
+    pct = edge * 100
+    if pct >= 5.0:
+        return 4
+    if pct >= 0.0:
+        return 3
+    if pct >= -3.0:
+        return 2
+    if pct >= -8.0:
+        return 1
+    return 0
+
+
+def _quantile_cuts(values: List[float]) -> List[float]:
+    """4 cut points splitting `values` into quintiles - this table's own
+    real spread of values, computed fresh per table/market rather than a
+    fixed guess. Degrades gracefully (fewer distinct real cuts) for a
+    short list; `[]` for an empty one.
+    """
+    if not values:
+        return []
+    s = sorted(values)
+    n = len(s)
+    return [s[min(n - 1, int(p * n))] for p in (0.2, 0.4, 0.6, 0.8)]
+
+
+def _rate_bucket(value: Optional[float], cuts: List[float]) -> Optional[int]:
+    if value is None or not cuts:
+        return None
+    bucket = 0
+    for c in cuts:
+        if value > c:
+            bucket += 1
+    return min(bucket, 4)
+
+
+def _chip(text: str, bucket: Optional[int]) -> str:
+    if bucket is None:
+        return _esc(text)
+    return f'<span class="rate-chip rate-chip-{bucket}">{_esc(text)}</span>'
+
+
 def _component_label(name: str) -> str:
     return name.replace("_", " ").replace("pct", "%").title().replace("Hr", "HR").replace("Fb", "FB").replace("Iso", "ISO").replace("Xslg", "xSLG")
 
@@ -251,7 +321,14 @@ def _component_detail_html(
     return f'<span class="expand-toggle" data-role="expand">why? &#9662;</span><div class="detail-panel">{detail_rows}{other_props}</div>'
 
 
-def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str, all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None) -> str:
+def _prop_row(
+    e: EdgeCandidate,
+    heat: Optional[HeatIndex],
+    kind: str,
+    all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None,
+    l15_cuts: Optional[List[float]] = None,
+    season_cuts: Optional[List[float]] = None,
+) -> str:
     # bp_model_prob: Ballpark Pal's own independent model, when configured
     # (see edges.py's EdgeCandidate docstring) - "n/a" for 2+ TB and
     # whenever it isn't configured or has no data for this matchup.
@@ -259,13 +336,17 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str, all_props_
     # clearance_cols (from report.py, shared with the console report so the
     # two never drift): (L15 literal count, season rate) - see its
     # docstring for why L5/L10 aren't shown here either. clearance_rates is
-    # the same real numbers as raw 0-1 floats, for the sort columns below -
-    # never guessed when clearance_cols itself would show "n/a".
+    # the same real numbers as raw 0-1 floats, for the sort columns and the
+    # colored rating chips below - never guessed when clearance_cols itself
+    # would show "n/a". l15_cuts/season_cuts are this table's own real
+    # quintile cut points (see _quantile_cuts) - None/[] renders plain text.
     l15, szn = clearance_cols(heat, kind)
     l15_rate, season_rate = clearance_rates(heat, kind)
     l15_data = "" if l15_rate is None else f"{l15_rate:.4f}"
     season_data = "" if season_rate is None else f"{season_rate:.4f}"
-    clr_cells = f'<td class="num" data-k="l15">{_esc(l15)}</td><td class="num" data-k="season">{_esc(szn)}</td>'
+    l15_chip = _chip(l15, _rate_bucket(l15_rate, l15_cuts or []))
+    season_chip = _chip(szn, _rate_bucket(season_rate, season_cuts or []))
+    clr_cells = f'<td class="num" data-k="l15">{l15_chip}</td><td class="num" data-k="season">{season_chip}</td>'
     verdict_rank = _VERDICT_RANK[_verdict(e.has_market_data, e.tier, e.ev_percent_model)[0]]
     if not e.has_market_data:
         return f"""
@@ -295,6 +376,8 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str, all_props_
     fair_data = "" if e.market_fair_prob is None else f"{e.market_fair_prob:.4f}"
     edge_data = "" if e.edge_vs_market is None else f"{e.edge_vs_market:.4f}"
     evmarket_data = "" if e.ev_percent_market is None else f"{e.ev_percent_market:.2f}"
+    edge_chip = _chip(edge_cell, _edge_bucket(e.edge_vs_market))
+    ev_chip = _chip(f"{e.ev_percent_model:+.1f}%", _ev_bucket(e.ev_percent_model))
     return f"""
           <tr data-player="{_esc(e.player.lower())}" data-book="{_esc(e.best_line.sportsbook.lower())}" data-tier="{_esc(e.tier)}" data-prob="{e.model_prob}" data-ev="{e.ev_percent_model}"
               data-verdict="{verdict_rank}" data-fair="{fair_data}" data-edge="{edge_data}" data-evmarket="{evmarket_data}"
@@ -307,8 +390,8 @@ def _prop_row(e: EdgeCandidate, heat: Optional[HeatIndex], kind: str, all_props_
             <td class="num pos" data-k="price">{e.best_line.odds:+d}</td>
             <td class="book" data-k="book">{_esc(e.best_line.sportsbook)}</td>
             <td class="num" data-k="fair">{_fmt_opt_pct(e.market_fair_prob)}</td>
-            <td class="num {'pos' if e.edge_vs_market is not None and e.edge_vs_market >= 0 else 'neg' if e.edge_vs_market is not None else ''}" data-k="edge">{edge_cell}</td>
-            <td class="num {'pos' if e.ev_percent_model >= 0 else 'neg'}" data-k="ev">{e.ev_percent_model:+.1f}%</td>
+            <td class="num" data-k="edge">{edge_chip}</td>
+            <td class="num" data-k="ev">{ev_chip}</td>
             <td class="num {'pos' if e.ev_percent_market is not None and e.ev_percent_market >= 0 else 'neg' if e.ev_percent_market is not None else ''}" data-k="evmarket">{ev_market_cell}</td>
             <td class="num" data-k="books">{e.books_quoting}</td>
             <td class="wx-cell" data-k="weather">{wind}, {temp} <b>{e.weather_boost_pct:+.1f}%</b></td>
@@ -325,13 +408,14 @@ def _breakeven_cell(breakeven: Optional[int]) -> str:
 def _reco_row(r: RecommendedBet, all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None) -> str:
     edge_cell = f"{r.edge_vs_market:+.1%}" if r.edge_vs_market is not None else "n/a"
     label, css_class = _verdict(True, r.tier, r.ev_percent_model)
+    edge_chip = _chip(edge_cell, _edge_bucket(r.edge_vs_market))
     return f"""
       <div class="reco-row">
         <div><span class="verdict {css_class}" style="margin-right:8px;">{_esc(label)}</span><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div>{_component_detail_html(r.market, r.components, r.player, r.event, all_props_by_player)}</div>
         <div class="event">{_esc(r.event)}</div>
         <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}{_breakeven_cell(r.breakeven)}</div>
         <div class="prob num">{_fmt_pct(r.model_prob)} model<div class="mkt-fair">{_fmt_opt_pct(r.market_fair_prob)} market fair</div></div>
-        <div class="edge num {'pos' if r.edge_vs_market is not None and r.edge_vs_market >= 0 else 'neg' if r.edge_vs_market is not None else ''}">{edge_cell}</div>
+        <div class="edge num">{edge_chip}</div>
         <div class="reco-units"><div class="n">{r.units:g}u</div><div class="lbl">size</div></div>
       </div>"""
 
@@ -460,7 +544,21 @@ def _prop_table(
     <div class="section-head"><h2>{_esc(title)}</h2><span class="hint">{_esc(hint)}</span></div>
     <div class="empty">No candidates scored for this slate.</div>"""
     shown = edges[:top]
-    rows = "".join(_prop_row(e, heat_by_player.get(e.player), kind, all_props_by_player) for e in shown)
+    # This table's own real quintile cuts for the two clearance-rate
+    # columns (see _quantile_cuts) - computed once here from every shown
+    # row's real rate, rather than re-deriving it per row.
+    l15_vals, season_vals = [], []
+    for e in shown:
+        l15_rate, season_rate = clearance_rates(heat_by_player.get(e.player), kind)
+        if l15_rate is not None:
+            l15_vals.append(l15_rate)
+        if season_rate is not None:
+            season_vals.append(season_rate)
+    l15_cuts = _quantile_cuts(l15_vals)
+    season_cuts = _quantile_cuts(season_vals)
+    rows = "".join(
+        _prop_row(e, heat_by_player.get(e.player), kind, all_props_by_player, l15_cuts, season_cuts) for e in shown
+    )
     # Real books actually seen in this table, for the filter dropdown - never
     # a fixed list (a book with zero real prices tonight shouldn't appear as
     # a selectable, always-empty filter option).
