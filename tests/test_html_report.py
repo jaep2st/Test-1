@@ -102,6 +102,65 @@ def test_verdict_matches_the_real_recommended_bets_classification():
     assert _verdict(True, "agree", MIN_EV_PERCENT_TO_RECOMMEND) == ("STRONG BET", "verdict-strong")
 
 
+def test_ev_bucket_uses_the_real_recommend_bar_as_its_boundary():
+    from mlb_props.betting import MIN_EV_PERCENT_TO_RECOMMEND
+    from mlb_props.html_report import _ev_bucket
+
+    assert _ev_bucket(None) is None
+    assert _ev_bucket(-15.0) == 0
+    assert _ev_bucket(-5.0) == 1
+    assert _ev_bucket(0.0) == 2
+    assert _ev_bucket(MIN_EV_PERCENT_TO_RECOMMEND) == 3  # the exact real bar Recommended Bets uses
+    assert _ev_bucket(15.0) == 4
+
+
+def test_edge_bucket_buckets_by_real_sign_and_magnitude():
+    from mlb_props.html_report import _edge_bucket
+
+    assert _edge_bucket(None) is None
+    assert _edge_bucket(-0.10) == 0
+    assert _edge_bucket(-0.05) == 1
+    assert _edge_bucket(-0.01) == 2
+    assert _edge_bucket(0.0) == 3
+    assert _edge_bucket(0.06) == 4
+
+
+def test_quantile_cuts_splits_a_real_value_spread_into_quintiles():
+    from mlb_props.html_report import _quantile_cuts, _rate_bucket
+
+    values = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00]
+    cuts = _quantile_cuts(values)
+    assert len(cuts) == 4
+    # the lowest real value sorts into the bottom bucket, the highest into the top
+    assert _rate_bucket(values[0], cuts) == 0
+    assert _rate_bucket(values[-1], cuts) == 4
+
+
+def test_quantile_cuts_and_rate_bucket_are_none_safe():
+    from mlb_props.html_report import _quantile_cuts, _rate_bucket
+
+    assert _quantile_cuts([]) == []
+    assert _rate_bucket(0.5, []) is None
+    assert _rate_bucket(None, [0.1, 0.2, 0.3, 0.4]) is None
+
+
+def test_chip_wraps_a_real_bucket_and_passes_through_otherwise():
+    from mlb_props.html_report import _chip
+
+    assert _chip("+5.0%", 4) == '<span class="rate-chip rate-chip-4">+5.0%</span>'
+    assert _chip("n/a", None) == "n/a"
+
+
+def test_html_report_prop_rows_show_colored_rating_chips():
+    from mlb_props.betting import build_recommended_bets
+
+    report = _report()
+    strong, _ = build_recommended_bets(report)
+    assert strong  # a real +EV pick, so the EV/edge chips below have a real value to render
+    html_text = render_html_report(report)
+    assert "rate-chip" in html_text
+
+
 def test_html_report_prop_tables_show_a_verdict_badge():
     html_text = render_html_report(_report())
     assert 'data-k="verdict"' in html_text

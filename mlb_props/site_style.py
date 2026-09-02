@@ -162,6 +162,32 @@ table.sortable thead th .arrow{ margin-left:3px; opacity:.5; }
 table.sortable thead th.sorted .arrow{ opacity:1; color:var(--accent); }
 tr.hidden-row{ display:none; }
 
+/* --- Rating chips: a Ballpark-Pal-style colored badge on the columns that
+   matter most for spotting a real bet (EV, edge, clearance rate) - green
+   is best, red is worst, same 5-step scale everywhere. Solid, fixed
+   colors regardless of light/dark theme (like a language-color badge) so
+   the "how good is this number" read never changes with the page theme. */
+.rate-chip{ display:inline-flex; align-items:center; justify-content:center; min-width:38px; padding:3px 8px; border-radius:6px; font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-weight:700; font-size:12px; line-height:1.3; }
+.rate-chip-0{ background:#B23A2E; color:#fff; }
+.rate-chip-1{ background:#D97F3D; color:#fff; }
+.rate-chip-2{ background:#D8B33B; color:#241C05; }
+.rate-chip-3{ background:#6FAE6E; color:#0C2410; }
+.rate-chip-4{ background:#1C7A4C; color:#fff; }
+
+/* --- Mobile: sticky verdict + player columns so scrolling a wide prop
+   table horizontally never loses track of which row is which, plus a
+   tighter table on narrow screens - the same real columns, easier to
+   scan on a phone. */
+table.props td:first-child, table.props th:first-child{ position:sticky; left:0; z-index:2; width:112px; min-width:112px; background:var(--surface); }
+table.props thead th:first-child{ background:var(--surface-2); z-index:3; }
+table.props td.player, table.props th[data-k="player"]{ position:sticky; left:112px; z-index:2; background:var(--surface); box-shadow:4px 0 6px -4px rgba(0,0,0,.18); }
+table.props thead th[data-k="player"]{ background:var(--surface-2); z-index:3; }
+table.props tbody tr:hover td:first-child, table.props tbody tr:hover td.player{ background:var(--surface-2); }
+@media (max-width:640px){
+  table.props{ font-size:12px; }
+  table.props thead th, table.props tbody td{ padding:8px 9px; }
+}
+
 /* --- Calibration chart --- */
 .calib-wrap{ background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 20px 10px; box-shadow:var(--shadow); }
 .calib-legend{ display:flex; gap:18px; font-size:12.5px; color:var(--ink-muted); margin-bottom:8px; flex-wrap:wrap; }
