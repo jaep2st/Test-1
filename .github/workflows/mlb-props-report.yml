@@ -70,6 +70,11 @@ on:
         type: boolean
         required: false
         default: false
+      betstamp_diagnostic:
+        description: "Also run --betstamp-diagnostic (diagnostic: calls Betstamp's real /api/markets endpoint directly and reports how many real PropLines parsed - see odds_monitor/providers/betstamp.py's module docstring, its field names/required params were never confirmed against a real response. Printed to this job's log, not the published report). Requires BETSTAMP_API_KEY."
+        type: boolean
+        required: false
+        default: false
       name_lookup_check:
         description: "Space-separated player full names (e.g. 'Gunnar Henderson' 'Pete Alonso' - quote each name) to check directly against the real Baseball Savant leaderboard, isolated from the rest of the pipeline. Leave blank to skip. Printed to this job's log, not the published report."
         required: false
@@ -259,6 +264,13 @@ jobs:
           BALLPARKPAL_API_KEY: ${{ secrets.BALLPARKPAL_API_KEY }}
         run: |
           python mlb_props_main.py --ballparkpal-matchups-check --date "${{ inputs.date || 'today' }}"
+
+      - name: Check Betstamp's real API response shape
+        if: ${{ inputs.betstamp_diagnostic }}
+        env:
+          BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
+        run: |
+          python mlb_props_main.py --betstamp-diagnostic --log-level DEBUG
 
       - name: Check specific player names against the real Savant leaderboard
         if: ${{ inputs.name_lookup_check != '' }}
