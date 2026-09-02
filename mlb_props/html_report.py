@@ -420,13 +420,25 @@ def _reco_row(r: RecommendedBet, all_props_by_player: Optional[Dict[str, List[Ed
       </div>"""
 
 
+# A real slate can clear the bar with far more plays than fit on one
+# screen (every real +EV pick, no cap on the underlying selection) - past
+# this many, the rest sit behind a "show N more" toggle rather than
+# forcing everyone to scroll past all of them just to reach the next
+# section. Nothing is hidden, just deferred one click.
+_RECO_VISIBLE_CAP = 8
+
+
 def _reco_group(title: str, hint: str, recs: List[RecommendedBet], all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None) -> str:
-    body = (
-        "".join(_reco_row(r, all_props_by_player) for r in recs)
-        if recs
-        else '<div class="reco-empty">No real plays cleared the bar here right now.</div>'
-    )
-    list_wrap = f'<div class="reco-list">{body}</div>' if recs else body
+    if not recs:
+        list_wrap = '<div class="reco-empty">No real plays cleared the bar here right now.</div>'
+    else:
+        visible, rest = recs[:_RECO_VISIBLE_CAP], recs[_RECO_VISIBLE_CAP:]
+        body = "".join(_reco_row(r, all_props_by_player) for r in visible)
+        more_html = ""
+        if rest:
+            rest_rows = "".join(_reco_row(r, all_props_by_player) for r in rest)
+            more_html = f'<details class="reco-more"><summary>Show {len(rest)} more</summary>{rest_rows}</details>'
+        list_wrap = f'<div class="reco-list">{body}{more_html}</div>'
     return f"""
     <div class="reco-group">
       <div class="reco-group-head"><h3>{_esc(title)}</h3><span class="hint">{_esc(hint)}</span></div>
@@ -450,7 +462,7 @@ def _recommended_bets_section(
         all_props_by_player,
     )
     return f"""
-  <section class="section" style="margin-top:0;">
+  <section class="section" id="reco" style="margin-top:0;">
     <div class="section-head">
       <h2>Tonight's Recommended Bets</h2>
       <span class="hint">Every real +EV play that clears the bar, sized to a conservative fraction of Kelly</span>
@@ -496,7 +508,7 @@ def _live_bets_section(live_bets: List[LiveValueBet]) -> str:
     )
     list_wrap = f'<div class="reco-list">{body}</div>' if live_bets else body
     return f"""
-  <section class="section">
+  <section class="section" id="live">
     <div class="section-head">
       <h2>Live Right Now ({len(live_bets)})</h2>
       <span class="hint">Already-started games only - real cross-book value, not this model's own score</span>
@@ -595,6 +607,28 @@ def _prop_table(
         </tbody>
       </table>
     </div>"""
+
+
+def _quick_nav(has_live: bool) -> str:
+    """Jump straight to a section instead of scrolling past everything
+    above it - the actual fix for a page that's grown long, without
+    deleting any of the real content people asked to keep. Sticky, so
+    it's still one tap away no matter how far down the page you've
+    scrolled. "Live Right Now" only appears in the nav when there's a
+    real live section on the page to jump to.
+    """
+    links = [("#reco", "Recommended")]
+    if has_live:
+        links.append(("#live", "Live Now"))
+    links += [
+        ("#props-hr", "HR Props"),
+        ("#props-tb", "2+ TB"),
+        ("#props-hits", "1+ Hits"),
+        ("#envs", "Matchups"),
+        ("#hot", "Who's Hot"),
+        ("#method", "Methodology"),
+    ]
+    return '<nav class="quick-nav">' + "".join(f'<a href="{href}">{_esc(label)}</a>' for href, label in links) + "</nav>"
 
 
 def render_html_report(
@@ -702,6 +736,8 @@ def render_html_report(
     <span class="detail">{status_detail}</span>
   </div>
 
+  {_quick_nav(bool(live_bets))}
+
   {_recommended_bets_section(strong_recs, speculative_recs, all_props_by_player)}
 
   {_live_bets_section(live_bets or [])}
@@ -713,39 +749,42 @@ def render_html_report(
     </div>
   </section>
 
-  <section class="section">
-    <div class="section-head">
-      <h2>Best HR matchups on the slate</h2>
-      <span class="hint">Park factor &middot; wind/temp &middot; opposing starter vulnerability</span>
-    </div>
-    <div class="env-grid">{env_cards if env_cards else '<div class="empty">No games on this slate.</div>'}</div>
-  </section>
-
-  <section class="section">
-    <div class="section-head">
-      <h2>Who's hot</h2>
-      <span class="hint">Last-15-day wOBA vs. season baseline, as a z-score</span>
-    </div>
-    <div class="hot-list">{hot_rows if hot_rows else '<div class="empty">No batters scored.</div>'}</div>
-  </section>
-
-  <section class="section">
+  <section class="section" id="props-hr">
     {_prop_table("Best home run props", 'Ranked by our model’s EV% against the best live price - "agree" = model & market both see value', hr, "Model P(HR)", top, heat_by_player, "hr", "hr", all_props_by_player)}
   </section>
 
-  <section class="section">
+  <section class="section" id="props-tb">
     {_prop_table("Best 2+ total bases props", "Ranked by our model's EV% against the best live price", tb, "Model P(2+ TB)", top, heat_by_player, "tb2", "tb", all_props_by_player)}
   </section>
 
-  <section class="section">
+  <section class="section" id="props-hits">
     {_prop_table("Best 1+ hits props", "Ranked by our model's EV% against the best live price", hits, "Model P(1+ Hits)", top, heat_by_player, "hit", "hits", all_props_by_player)}
   </section>
 
-  <section class="section">
-    <div class="section-head">
+  <details class="section" id="envs">
+    <summary class="collapse-head">
+      <h2>Best HR matchups on the slate</h2>
+      <span class="hint">Park factor &middot; wind/temp &middot; opposing starter vulnerability</span>
+      <span class="details-arrow">&#9662;</span>
+    </summary>
+    <div class="env-grid">{env_cards if env_cards else '<div class="empty">No games on this slate.</div>'}</div>
+  </details>
+
+  <details class="section" id="hot">
+    <summary class="collapse-head">
+      <h2>Who's hot</h2>
+      <span class="hint">Last-15-day wOBA vs. season baseline, as a z-score</span>
+      <span class="details-arrow">&#9662;</span>
+    </summary>
+    <div class="hot-list">{hot_rows if hot_rows else '<div class="empty">No batters scored.</div>'}</div>
+  </details>
+
+  <details class="section" id="method">
+    <summary class="collapse-head">
       <h2>How the score is built</h2>
       <span class="hint">mlb_props/scoring.py &mdash; every weight below, verbatim</span>
-    </div>
+      <span class="details-arrow">&#9662;</span>
+    </summary>
     <div class="method-grid">
       <div class="method-card"><h3>Home run score (weights)</h3>{_weight_rows(HR_WEIGHTS)}</div>
       <div class="method-card"><h3>2+ total bases score (weights)</h3>{_weight_rows(TB_WEIGHTS)}</div>
@@ -759,7 +798,7 @@ def render_html_report(
       <span class="source-chip">Wind + temperature &rarr; Open-Meteo</span>
       <span class="source-chip">Cross-book odds + no-vig fair price &rarr; Betstamp</span>
     </div>
-  </section>
+  </details>
 
   <footer>
     <p><strong>Weather is a first-class input:</strong> each pick's wind (mph, in/out) and temperature feed a heuristic HR-odds shift, weighted directly into both scores (8% of the HR score, 5% of the 2+ TB score) and shown per-pick in the Weather column.</p>

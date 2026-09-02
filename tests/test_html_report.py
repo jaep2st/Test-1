@@ -40,6 +40,27 @@ def test_html_report_is_well_formed_and_self_contained():
     assert "src=\"http" not in html_text
 
 
+def test_html_report_has_a_quick_nav_linking_every_section():
+    html_text = render_html_report(_report())
+    for anchor in ("#reco", "#props-hr", "#props-tb", "#props-hits", "#envs", "#hot", "#method"):
+        assert f'href="{anchor}"' in html_text, f"quick-nav is missing a link to {anchor}"
+    for section_id in ("reco", "props-hr", "props-tb", "props-hits", "envs", "hot", "method"):
+        assert f'id="{section_id}"' in html_text, f"no element on the page actually has id={section_id!r}"
+
+
+def test_html_report_reference_sections_are_collapsed_by_default():
+    # Matchups/Who's-hot/Methodology are real reference material, not a
+    # bet to place - they default closed so the page opens on what
+    # matters (Recommended Bets + the prop tables), full detail always
+    # one click away via native <details>, never deleted.
+    html_text = render_html_report(_report())
+    for section_id in ("envs", "hot", "method"):
+        opening_tag_idx = html_text.index(f'<details class="section" id="{section_id}">')
+        # the opening tag must not carry the "open" attribute
+        tag_end = html_text.index(">", opening_tag_idx)
+        assert "open" not in html_text[opening_tag_idx:tag_end]
+
+
 def test_html_report_shows_sample_banner_only_in_mock_mode():
     mock_html = render_html_report(_report(), is_mock=True)
     assert "SAMPLE OUTPUT" in mock_html
@@ -311,6 +332,43 @@ def test_html_report_recommended_bets_market_fair_is_honestly_na_when_absent():
     row_html = _reco_row(r)
     assert "n/a market fair" in row_html
     assert "verdict-speculative" in row_html
+
+
+def test_reco_group_caps_visible_rows_and_defers_the_rest():
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _RECO_VISIBLE_CAP, _reco_group
+
+    def _bet(i):
+        return RecommendedBet(
+            player=f"Player {i}", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+            tier="agree", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=10.0,
+            best_price=200, best_book="draftkings", books_quoting=2, units=1.0, full_kelly_percent=4.0, breakeven=400,
+        )
+
+    recs = [_bet(i) for i in range(_RECO_VISIBLE_CAP + 3)]
+    html_text = _reco_group("Strong plays", "hint", recs)
+    for r in recs[:_RECO_VISIBLE_CAP]:
+        assert r.player in html_text
+    assert "Show 3 more" in html_text
+    assert "reco-more" in html_text
+
+
+def test_reco_group_shows_no_expander_at_or_under_the_cap():
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _RECO_VISIBLE_CAP, _reco_group
+
+    def _bet(i):
+        return RecommendedBet(
+            player=f"Player {i}", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+            tier="agree", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=10.0,
+            best_price=200, best_book="draftkings", books_quoting=2, units=1.0, full_kelly_percent=4.0, breakeven=400,
+        )
+
+    recs = [_bet(i) for i in range(_RECO_VISIBLE_CAP)]
+    html_text = _reco_group("Strong plays", "hint", recs)
+    assert "reco-more" not in html_text
+    for r in recs:
+        assert r.player in html_text
 
 
 def test_html_report_shows_recommended_bets_with_real_units():
