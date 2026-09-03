@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from .betting import MIN_EV_PERCENT_TO_RECOMMEND, RecommendedBet, build_recommended_bets
-from .edges import EdgeCandidate
+from .edges import MIN_BOOKS_FOR_MARKET_AGREE, EdgeCandidate
 from .hot_streak import HeatIndex
 from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
 from .pipeline import MatchupEnvironment, SlateReport
@@ -408,7 +408,7 @@ def _prop_row(
             <td class="num secondary-col" data-k="edge">{edge_chip}</td>
             <td class="num" data-k="ev">{ev_chip}</td>
             <td class="num secondary-col {'pos' if e.ev_percent_market is not None and e.ev_percent_market >= 0 else 'neg' if e.ev_percent_market is not None else ''}" data-k="evmarket">{ev_market_cell}</td>
-            <td class="num secondary-col" data-k="books">{e.books_quoting}</td>
+            <td class="num secondary-col{' books-thin' if e.books_quoting < MIN_BOOKS_FOR_MARKET_AGREE else ''}" data-k="books">{e.books_quoting}</td>
             <td class="wx-cell secondary-col" data-k="weather">{wind}, {temp} <b>{e.weather_boost_pct:+.1f}%</b></td>
             {clr_cells}
           </tr>"""
@@ -418,6 +418,27 @@ def _breakeven_cell(breakeven: Optional[int]) -> str:
     if breakeven is None:
         return ""
     return f'<div class="breakeven">beat {breakeven:+d}</div>'
+
+
+def _books_quoting_note(books_quoting: int) -> str:
+    """A visible flag when `best_price` came from a thin market (fewer than
+    MIN_BOOKS_FOR_MARKET_AGREE books quoting this side at all) - the price
+    shown is real, but it's one book's own number, not something other
+    books have had a chance to confirm or undercut yet, so it's the
+    number most likely to move by the time you actually go to bet it.
+
+    Confirmed live (2026-09-03, real user report): a report ran early in
+    the day recommended a real "STRONG BET" at ESPN BET's +900 - the only
+    book quoting Angel Genao's HR market at fetch time - while Fanatics
+    posted +1500 for the exact same bet once its own line went up shortly
+    after. Nothing on the Recommended Bets card said "only 1 book" at the
+    time; this note exists so that's visible before, not after, a real bet
+    would have been placed at a price a second book beat by a wide margin.
+    """
+    if books_quoting >= MIN_BOOKS_FOR_MARKET_AGREE:
+        return f'<div class="books-note">{books_quoting} books quoting</div>'
+    label = "1 book quoting" if books_quoting == 1 else "no other book quoting yet"
+    return f'<div class="books-note books-note-thin">{label} &mdash; price may move, shop before betting</div>'
 
 
 def _take_bet_button(r: RecommendedBet, game_date_iso: str) -> str:
@@ -454,7 +475,7 @@ def _reco_row(r: RecommendedBet, game_date_iso: str, all_props_by_player: Option
       <div class="reco-row">
         <div><span class="verdict {css_class}" style="margin-right:8px;">{_esc(label)}</span><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div>{_lineup_source_note(r.lineup_source)}{_component_detail_html(r.market, r.components, r.player, r.event, all_props_by_player)}</div>
         <div class="event">{_esc(r.event)}</div>
-        <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}{_breakeven_cell(r.breakeven)}</div>
+        <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}{_breakeven_cell(r.breakeven)}{_books_quoting_note(r.books_quoting)}</div>
         <div class="prob num">{_fmt_pct(r.model_prob)} model<div class="mkt-fair">{_fmt_opt_pct(r.market_fair_prob)} market fair</div></div>
         <div class="edge num">{edge_chip}</div>
         <div class="reco-units"><div class="n">{r.units:g}u</div><div class="lbl">size</div>{_take_bet_button(r, game_date_iso)}</div>
@@ -497,7 +518,7 @@ def _recommended_bets_section(
 ) -> str:
     strong_html = _reco_group(
         f"Strong plays ({len(strong)})",
-        "Model + market both see real value - our fundamentals and the market's own cross-book pricing agree",
+        "Model + market both see real value - our fundamentals and a real cross-book consensus (2+ independent books) agree",
         strong,
         game_date_iso,
         all_props_by_player,

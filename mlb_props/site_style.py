@@ -115,6 +115,14 @@ table.props td.event{ color:var(--ink-muted); font-size:12.5px; white-space:norm
 .lineup-note{ font-size:10.5px; font-weight:600; margin-top:3px; }
 .lineup-note.lineup-confirmed{ color:var(--positive); }
 .lineup-note.lineup-projected{ color:var(--ink-muted); }
+/* Real user report (2026-09-03): a "STRONG BET" was sized off a single
+   book's price (ESPN BET, the only book quoting it yet) while a second
+   book (Fanatics) posted a far better number shortly after - nothing on
+   the card said "only 1 book" at the time. books-note-thin is that flag,
+   in the same visual weight as the breakeven line it sits next to. */
+.books-note{ font-size:10.5px; color:var(--ink-muted); margin-top:1px; }
+.books-note-thin{ color:var(--negative); font-weight:600; }
+.books-thin{ color:var(--negative); font-weight:700; }
 .verdict{ display:inline-block; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; border-radius:5px; padding:3px 7px; white-space:nowrap; }
 .verdict-strong{ background:var(--positive-tint); color:var(--positive); }
 .verdict-speculative{ background:var(--accent-tint); color:var(--accent-strong); }

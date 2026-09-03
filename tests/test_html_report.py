@@ -260,17 +260,35 @@ def test_html_report_recommended_bets_show_the_real_market_fair_value():
     assert "verdict-strong" in row_html
 
 
-def _candidate(player, market, event, ev_percent_model=6.0, has_market=True, best_price=150, book="draftkings"):
+def _candidate(player, market, event, ev_percent_model=6.0, has_market=True, best_price=150, book="draftkings", books_quoting=None):
     from mlb_props.edges import EdgeCandidate
     from odds_monitor.models import PropLine
 
     best_line = PropLine(player=player, team=None, league="mlb", market=market, side="yes", line=0.5, odds=best_price, sportsbook=book, event=event) if has_market else None
+    if books_quoting is None:
+        books_quoting = 2 if has_market else 0
     return EdgeCandidate(
         player=player, market=market, event=event, model_score=70.0, model_prob=0.15, market_fair_prob=0.12,
         best_line=best_line, ev_percent_model=ev_percent_model if has_market else None, ev_percent_market=None,
-        edge_vs_market=None, price_spread_percent=None, books_quoting=2 if has_market else 0, park="Test Park",
+        edge_vs_market=None, price_spread_percent=None, books_quoting=books_quoting, park="Test Park",
         wind_out_mph=0.0, temp_f=70.0, is_dome=False, weather_boost_pct=0.0,
     )
+
+
+def test_prop_row_flags_a_thin_one_book_market_in_the_full_table_too():
+    from mlb_props.html_report import _prop_row
+
+    thin = _candidate("Player A", "batter_home_runs", "Team A @ Team B", books_quoting=1)
+    row_html = _prop_row(thin, heat=None, kind="hr")
+    assert "books-thin" in row_html
+
+
+def test_prop_row_does_not_flag_a_real_multi_book_market():
+    from mlb_props.html_report import _prop_row
+
+    real = _candidate("Player A", "batter_home_runs", "Team A @ Team B", books_quoting=3)
+    row_html = _prop_row(real, heat=None, kind="hr")
+    assert "books-thin" not in row_html
 
 
 def test_other_props_html_lists_a_players_other_real_candidates():
@@ -373,6 +391,39 @@ def test_html_report_recommended_bets_market_fair_is_honestly_na_when_absent():
     row_html = _reco_row(r, "2026-08-20")
     assert "n/a market fair" in row_html
     assert "verdict-speculative" in row_html
+
+
+def test_reco_row_flags_a_thin_one_book_market():
+    # Real user report (2026-09-03): a "STRONG BET" was priced off ESPN
+    # BET alone (the only book quoting it at fetch time) while Fanatics
+    # posted a much better number shortly after - nothing on the card said
+    # "only 1 book" at the time. This is that flag.
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _reco_row
+
+    r = RecommendedBet(
+        player="Angel Genao", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+        tier="model_only", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=10.0,
+        best_price=900, best_book="espnbet", books_quoting=1, units=1.0, full_kelly_percent=4.0, breakeven=400,
+    )
+    row_html = _reco_row(r, "2026-08-20")
+    assert "books-note-thin" in row_html
+    assert "1 book quoting" in row_html
+    assert "shop before betting" in row_html
+
+
+def test_reco_row_does_not_flag_a_real_multi_book_market():
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _reco_row
+
+    r = RecommendedBet(
+        player="Player A", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+        tier="agree", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=10.0,
+        best_price=200, best_book="draftkings", books_quoting=3, units=1.0, full_kelly_percent=4.0, breakeven=400,
+    )
+    row_html = _reco_row(r, "2026-08-20")
+    assert "books-note-thin" not in row_html
+    assert "3 books quoting" in row_html
 
 
 def test_reco_group_caps_visible_rows_and_defers_the_rest():

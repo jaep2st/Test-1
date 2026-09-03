@@ -54,6 +54,25 @@ from .market import (
 )
 from .scoring import HitsScoreResult, HRScoreResult, TotalBasesScoreResult
 
+# A single book with two-sided pricing is enough for find_fair_prices() to
+# produce a real FairPrice (books_used=1 is valid there - see that
+# function's docstring), but one book's number is that book's own opening
+# price, not a real cross-book consensus - exactly the kind of thin, fast-
+# moving price this project has no way to know is about to change.
+#
+# Confirmed live (2026-09-03, real user report): an early-morning run
+# scored Angel Genao's 1+ HR prop as tier == "agree" ("STRONG BET",
+# quarter-Kelly sizing) off ESPN BET alone (books_quoting=1, +900) - no
+# other book had posted that market yet. By the time the user checked a
+# real odds-shopping app that same morning, Fanatics had posted +1500 for
+# the exact same bet - a real number the "consensus" this project trusted
+# never saw, because there was no consensus, just one book. A second
+# independent book agreeing is the minimum bar for "the market agrees" to
+# mean anything; below it, this project only ever had its own model's
+# opinion, so it's scored (and sized) as `model_only` instead - see
+# `tier` below.
+MIN_BOOKS_FOR_MARKET_AGREE = 2
+
 
 @dataclass(frozen=True)
 class EdgeCandidate:
@@ -111,8 +130,12 @@ class EdgeCandidate:
         recording (see that module), so a pick's recorded tier always
         matches what the published report actually showed for it that run.
         "agree" = model_prob beats the best price AND that price beats the
-        market's own no-vig consensus - the strongest kind of spot. See
-        this module's docstring for the two independent signals.
+        market's own no-vig consensus, AND at least MIN_BOOKS_FOR_MARKET_AGREE
+        independent books are actually behind that consensus - the strongest
+        kind of spot. See this module's docstring for the two independent
+        signals, and MIN_BOOKS_FOR_MARKET_AGREE's docstring for why a
+        single book's price doesn't qualify as "the market agrees" even
+        when the math otherwise lines up.
         """
         if not self.has_market_data:
             return "no_market"
@@ -121,6 +144,7 @@ class EdgeCandidate:
             and self.ev_percent_model > 0
             and self.edge_vs_market is not None
             and self.edge_vs_market > 0
+            and self.books_quoting >= MIN_BOOKS_FOR_MARKET_AGREE
         )
         if both_agree:
             return "agree"
