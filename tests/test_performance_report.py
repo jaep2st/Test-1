@@ -41,6 +41,18 @@ def test_renders_without_error_on_a_completely_empty_data_dir(tmp_path):
     assert f"{REFIT_READY_DAYS} days" in html  # the not-ready-yet framing
     assert "Weight refit check" in html
     assert "No resolved pick yet carries real component features" in html
+    assert "Market blend check" in html
+    assert "No resolved pick yet carries a real market_fair_prob" in html
+    assert "Methodology" in html
+
+
+def test_clv_tiles_lead_the_at_a_glance_tiles(tmp_path):
+    # CLV, not win rate, is the standard proxy for real betting skill (see
+    # the Methodology section) - the tiles should say so first.
+    html = render_performance_report(str(tmp_path))
+    clv_pos = html.index("Mean CLV")
+    hit_rate_pos = html.index("Real hit rate")
+    assert clv_pos < hit_rate_pos
 
 
 def test_renders_real_numbers_from_populated_data(tmp_path):
@@ -117,6 +129,34 @@ def test_renders_the_weight_refit_comparison_when_components_exist():
     # A real, informative component (barrel_pct) vs. an uninformative flat
     # model_prob should measurably beat the current model here.
     assert "Fitted weights measurably beat the current hand-set ones" in html
+
+
+def test_renders_the_market_blend_comparison_when_market_data_exists():
+    import tempfile
+
+    from mlb_props.refit import MIN_PICKS_TO_FIT
+
+    tmp_path = tempfile.mkdtemp()
+    os.makedirs(os.path.join(tmp_path, "picks"))
+    os.makedirs(os.path.join(tmp_path, "results"))
+
+    picks, outcomes = [], []
+    n = MIN_PICKS_TO_FIT + 20
+    for i in range(n):
+        won = i % 2 == 0
+        # model_prob is a constant, uninformative 0.5 for every pick;
+        # market_fair_prob perfectly separates won/lost - the blend fit
+        # should weight almost entirely toward the market and measurably
+        # beat pure model_prob on real held-out data.
+        picks.append(_pick(f"Player {i}", model_prob=0.5, market_fair_prob=0.95 if won else 0.05))
+        outcomes.append(GameOutcome(game_date="2026-08-20", player=f"Player {i}", got_hr=won, got_2plus_tb=False, got_hit=False))
+    _append_jsonl(picks, os.path.join(tmp_path, "picks", "2026-08-20.jsonl"))
+    _append_jsonl(outcomes, os.path.join(tmp_path, "results", "2026-08-20.jsonl"))
+
+    html = render_performance_report(tmp_path)
+    assert "Market blend check" in html
+    assert "1+ HR" in html
+    assert "measurably beats pure model_prob" in html
 
 
 def test_escapes_malicious_player_name_in_pick_log(tmp_path):
