@@ -41,6 +41,18 @@ def test_html_report_is_well_formed_and_self_contained():
     assert "src=\"http" not in html_text
 
 
+def test_why_toggle_scrolls_the_opened_panel_into_view():
+    # Confirmed live: a prop table's player column is sticky (site_style.py),
+    # so an opened "why?" detail-panel wider than that pinned column could
+    # render past the screen edge with no way to scroll to it - scrolling a
+    # container never moves a sticky-positioned element. The real fix is the
+    # CSS (see test_site_style.py), but the panel should also bring itself
+    # into view automatically on open, so nobody has to go hunting for the
+    # right scroll position by hand.
+    html_text = render_html_report(_report())
+    assert "scrollIntoView" in html_text
+
+
 def test_html_report_has_a_quick_nav_linking_every_section():
     html_text = render_html_report(_report())
     for anchor in ("#reco", "#my-bets", "#props-hr", "#props-tb", "#props-hits", "#envs", "#hot", "#method"):

@@ -123,7 +123,7 @@ table.props td.event{ color:var(--ink-muted); font-size:12.5px; white-space:norm
 .mkt-fair{ font-size:10.5px; color:var(--ink-muted); margin-top:1px; }
 .expand-toggle{ display:inline-block; margin-left:8px; font-size:11px; font-weight:600; color:var(--info); cursor:pointer; user-select:none; }
 .expand-toggle:hover{ text-decoration:underline; }
-.detail-panel{ display:none; margin-top:6px; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; max-width:380px; }
+.detail-panel{ display:none; margin-top:6px; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; max-width:min(380px, calc(100vw - 48px)); }
 .detail-panel.open{ display:block; }
 .detail-row{ display:flex; justify-content:space-between; gap:14px; padding:2px 0; font-size:11.5px; }
 .detail-row .label{ color:var(--ink-muted); }
@@ -209,6 +209,15 @@ table.props thead th:first-child{ background:var(--surface-2); z-index:3; }
 table.props td.player, table.props th[data-k="player"]{ position:sticky; left:112px; z-index:2; background:var(--surface); box-shadow:4px 0 6px -4px rgba(0,0,0,.18); }
 table.props thead th[data-k="player"]{ background:var(--surface-2); z-index:3; }
 table.props tbody tr:hover td:first-child, table.props tbody tr:hover td.player{ background:var(--surface-2); }
+/* Confirmed live: with the "why?" detail panel nested inside this sticky
+   cell, an open panel wider than the pinned column got visually clipped
+   at the screen edge with no way to scroll to the rest of it - scrolling
+   the table doesn't move a sticky-positioned element at all. Un-stick
+   just this one cell while its own panel is open, so it (and the panel)
+   scroll normally like every other column - the fix, not a workaround,
+   since a fixed-position cell was never compatible with content that can
+   grow wider than it. */
+table.props td.player:has(.detail-panel.open){ position:static; z-index:auto; box-shadow:none; }
 @media (max-width:640px){
   table.props{ font-size:12px; }
   table.props thead th, table.props tbody td{ padding:8px 9px; }
