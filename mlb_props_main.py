@@ -356,10 +356,10 @@ def run_historical_hot_streak_backtest(start_date: date, end_date: date) -> str:
         d += timedelta(days=1)
 
     schedule = MlbStatsApiScheduleProvider(include_rosters=False)
-    hot_streak = StatcastHotStreakProvider(season_start=date(start_date.year, 3, 1))
+    season_start = date(start_date.year, 3, 1)
     session = build_retrying_session()
 
-    observations = collect_hot_streak_observations(schedule, hot_streak, pyb, session, game_dates)
+    observations = collect_hot_streak_observations(schedule, pyb, game_dates, season_start, session)
     return summarize_hot_streak_backtest(observations)
 
 
