@@ -862,6 +862,19 @@ def render_html_report(
     if (!panel || !panel.classList.contains('detail-panel')) return;
     var open = panel.classList.toggle('open');
     toggle.innerHTML = open ? 'why? &#9652;' : 'why? &#9662;';
+    // Confirmed live: a prop table's player column is sticky (stays
+    // pinned while the wide table scrolls horizontally - see
+    // site_style.py), so an opened panel wider than that pinned column
+    // could render past the edge of the screen with no way to scroll to
+    // it (scrolling a container never moves a sticky element). CSS
+    // (td.player:has(.detail-panel.open){{position:static}}) now makes
+    // the cell scroll normally again once its own panel is open, which
+    // is what actually fixes it - this just brings it into view
+    // automatically so nobody has to go hunting for the right scroll
+    // position by hand.
+    if (open) {{
+      panel.scrollIntoView({{behavior: 'smooth', block: 'nearest', inline: 'nearest'}});
+    }}
   }});
 
   function initPropTable(id) {{
