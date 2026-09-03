@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from .betting import MIN_EV_PERCENT_TO_RECOMMEND, LiveValueBet, RecommendedBet, build_recommended_bets
+from .betting import MIN_EV_PERCENT_TO_RECOMMEND, RecommendedBet, build_recommended_bets
 from .edges import EdgeCandidate
 from .hot_streak import HeatIndex
 from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
@@ -490,46 +490,6 @@ def _recommended_bets_section(
   </section>"""
 
 
-def _live_row(b: LiveValueBet) -> str:
-    return f"""
-      <div class="reco-row">
-        <div><div class="who">{_esc(b.player)}</div><div class="bet">{_esc(b.market_label)}</div></div>
-        <div class="event">{_esc(b.event)}</div>
-        <div class="price num"><b class="pos">{b.best_price:+d}</b> {_esc(b.best_book)}{_breakeven_cell(b.breakeven)}</div>
-        <div class="prob num">{_fmt_pct(b.fair_prob)} mkt</div>
-        <div class="edge num pos">{b.ev_percent:+.1f}%</div>
-        <div class="reco-units"><div class="n">{b.units:g}u</div><div class="lbl">size</div></div>
-      </div>"""
-
-
-def _live_bets_section(live_bets: List[LiveValueBet]) -> str:
-    body = (
-        "".join(_live_row(b) for b in live_bets)
-        if live_bets
-        else '<div class="reco-empty">No real live cross-book value right now - check back once more games are underway.</div>'
-    )
-    list_wrap = f'<div class="reco-list">{body}</div>' if live_bets else body
-    return f"""
-  <section class="section" id="live">
-    <div class="section-head">
-      <h2>Live Right Now ({len(live_bets)})</h2>
-      <span class="hint">Already-started games only - real cross-book value, not this model's own score</span>
-    </div>
-    {list_wrap}
-    <div class="reco-disclosure">
-      <b>This is a different kind of signal than the recommendations above.</b> This project's own model has no
-      live-game-state awareness at all (no tracking of a batter's plate appearances remaining today), so a live bet is
-      never sized off this model's probability - there isn't one to use. "mkt" here is the real, de-vigged consensus
-      probability across the books quoting both sides of this exact live line right now, and "size" is an extra-
-      conservative 1/8-Kelly against that consensus (same units convention as above). The real risk with a live price
-      is less about that consensus being wrong and more about <b>timing</b>: a live line can reprice or disappear
-      within seconds, so a real edge here might already be gone by the time you'd act on it. Verify the price is still
-      live on your book before betting it - <b>"beat +N"/"beat -N"</b> under the price is the exact number to check
-      it against: your book's real price needs to be at least that good right now for this to still be worth taking.
-    </div>
-  </section>"""
-
-
 def _weight_rows(weights: dict) -> str:
     rows = []
     for name, w in sorted(weights.items(), key=lambda kv: kv[1], reverse=True):
@@ -613,18 +573,15 @@ def _prop_table(
     </div>"""
 
 
-def _quick_nav(has_live: bool) -> str:
+def _quick_nav() -> str:
     """Jump straight to a section instead of scrolling past everything
     above it - the actual fix for a page that's grown long, without
     deleting any of the real content people asked to keep. Sticky, so
     it's still one tap away no matter how far down the page you've
-    scrolled. "Live Right Now" only appears in the nav when there's a
-    real live section on the page to jump to.
+    scrolled.
     """
-    links = [("#reco", "Recommended")]
-    if has_live:
-        links.append(("#live", "Live Now"))
-    links += [
+    links = [
+        ("#reco", "Recommended"),
         ("#props-hr", "HR Props"),
         ("#props-tb", "2+ TB"),
         ("#props-hits", "1+ Hits"),
@@ -640,7 +597,6 @@ def render_html_report(
     top: int = 15,
     is_mock: bool = False,
     generated_at: Optional[datetime] = None,
-    live_bets: Optional[List[LiveValueBet]] = None,
 ) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
     envs = report.matchup_environments
@@ -740,11 +696,9 @@ def render_html_report(
     <span class="detail">{status_detail}</span>
   </div>
 
-  {_quick_nav(bool(live_bets))}
+  {_quick_nav()}
 
   {_recommended_bets_section(strong_recs, speculative_recs, all_props_by_player)}
-
-  {_live_bets_section(live_bets or [])}
 
   <section class="section">
     <span class="eyebrow">At a glance</span>
