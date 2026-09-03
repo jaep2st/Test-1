@@ -407,7 +407,33 @@ def _breakeven_cell(breakeven: Optional[int]) -> str:
     return f'<div class="breakeven">beat {breakeven:+d}</div>'
 
 
-def _reco_row(r: RecommendedBet, all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None) -> str:
+def _take_bet_button(r: RecommendedBet, game_date_iso: str) -> str:
+    """A client-side-only "I took this bet" toggle - see the My Bets
+    section's disclosure for why this stays in the browser (localStorage)
+    rather than writing anywhere server-side: a self-reported "I took
+    this" is real, but it isn't verified ground truth of what actually
+    happened, so it's never mixed into this project's own real,
+    server-recorded performance tracking (results.py/data/results/*.jsonl) -
+    that stays strictly resolved-from-real-outcomes only.
+
+    `key` is stable per (date, market, player, event) so a page reload -
+    even a full regeneration on the next run - re-marks the same button
+    "taken" if its localStorage record still exists, and so the same real
+    pick recorded twice in one day (this project's own snapshot
+    convention - see PickRecord.recorded_at's docstring) still maps to
+    one taken-bet entry, not two.
+    """
+    key = f"{game_date_iso}|{r.market}|{r.player.strip().lower()}|{r.event.strip().lower()}"
+    return (
+        f'<button type="button" class="take-btn" data-key="{_esc(key)}" '
+        f'data-player="{_esc(r.player)}" data-market-label="{_esc(r.market_label)}" '
+        f'data-event="{_esc(r.event)}" data-game-date="{_esc(game_date_iso)}" '
+        f'data-price="{r.best_price}" data-book="{_esc(r.best_book)}" '
+        f'data-units="{r.units:g}">Log this bet</button>'
+    )
+
+
+def _reco_row(r: RecommendedBet, game_date_iso: str, all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None) -> str:
     edge_cell = f"{r.edge_vs_market:+.1%}" if r.edge_vs_market is not None else "n/a"
     label, css_class = _verdict(True, r.tier, r.ev_percent_model)
     edge_chip = _chip(edge_cell, _edge_bucket(r.edge_vs_market))
@@ -418,7 +444,7 @@ def _reco_row(r: RecommendedBet, all_props_by_player: Optional[Dict[str, List[Ed
         <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}{_breakeven_cell(r.breakeven)}</div>
         <div class="prob num">{_fmt_pct(r.model_prob)} model<div class="mkt-fair">{_fmt_opt_pct(r.market_fair_prob)} market fair</div></div>
         <div class="edge num">{edge_chip}</div>
-        <div class="reco-units"><div class="n">{r.units:g}u</div><div class="lbl">size</div></div>
+        <div class="reco-units"><div class="n">{r.units:g}u</div><div class="lbl">size</div>{_take_bet_button(r, game_date_iso)}</div>
       </div>"""
 
 
@@ -430,15 +456,17 @@ def _reco_row(r: RecommendedBet, all_props_by_player: Optional[Dict[str, List[Ed
 _RECO_VISIBLE_CAP = 8
 
 
-def _reco_group(title: str, hint: str, recs: List[RecommendedBet], all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None) -> str:
+def _reco_group(
+    title: str, hint: str, recs: List[RecommendedBet], game_date_iso: str, all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None
+) -> str:
     if not recs:
         list_wrap = '<div class="reco-empty">No real plays cleared the bar here right now.</div>'
     else:
         visible, rest = recs[:_RECO_VISIBLE_CAP], recs[_RECO_VISIBLE_CAP:]
-        body = "".join(_reco_row(r, all_props_by_player) for r in visible)
+        body = "".join(_reco_row(r, game_date_iso, all_props_by_player) for r in visible)
         more_html = ""
         if rest:
-            rest_rows = "".join(_reco_row(r, all_props_by_player) for r in rest)
+            rest_rows = "".join(_reco_row(r, game_date_iso, all_props_by_player) for r in rest)
             more_html = f'<details class="reco-more"><summary>Show {len(rest)} more</summary>{rest_rows}</details>'
         list_wrap = f'<div class="reco-list">{body}{more_html}</div>'
     return f"""
@@ -449,18 +477,23 @@ def _reco_group(title: str, hint: str, recs: List[RecommendedBet], all_props_by_
 
 
 def _recommended_bets_section(
-    strong: List[RecommendedBet], speculative: List[RecommendedBet], all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None
+    strong: List[RecommendedBet],
+    speculative: List[RecommendedBet],
+    game_date_iso: str,
+    all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None,
 ) -> str:
     strong_html = _reco_group(
         f"Strong plays ({len(strong)})",
         "Model + market both see real value - our fundamentals and the market's own cross-book pricing agree",
         strong,
+        game_date_iso,
         all_props_by_player,
     )
     speculative_html = _reco_group(
         f"Speculative ({len(speculative)})",
         "Model only, no market confirmation - real edge by our own numbers, but nothing else backs it up. Sized smaller, treat with more scrutiny",
         speculative,
+        game_date_iso,
         all_props_by_player,
     )
     return f"""
@@ -487,6 +520,37 @@ def _recommended_bets_section(
       only for Speculative plays, where by definition no second book quotes the other side to de-vig against (see
       the Speculative hint above); every Strong play always has a real one, since that agreement is what makes it Strong.
     </div>
+  </section>"""
+
+
+def _my_bets_section() -> str:
+    """Entirely client-side: no data from `report` feeds this - it's
+    populated on load and updated on click by the JS at the bottom of the
+    page, reading/writing `localStorage`. See `_take_bet_button`'s
+    docstring for why this stays browser-local rather than being recorded
+    anywhere server-side.
+    """
+    return """
+  <section class="section" id="my-bets">
+    <div class="section-head">
+      <h2>My Bets</h2>
+      <span class="hint" id="my-bets-count">0 bets logged</span>
+    </div>
+    <p class="reco-disclosure" style="margin-top:0;">
+      Click <b>&ldquo;Log this bet&rdquo;</b> on a Recommended Bet above to record that you actually took it, at the
+      recommended size. <b>Stored only in this browser</b> (localStorage) - it never leaves your device, doesn't sync
+      across devices/browsers, isn't backed up anywhere, and clearing your browser data will lose it. This is your
+      personal log, kept deliberately separate from this project's own real, server-recorded performance tracking
+      (see the <a href="performance.html">Performance</a> page) - a self-reported "I took this" is real, but it isn't
+      verified ground truth of what actually happened, so it's never mixed into the official track record.
+    </p>
+    <div class="table-scroll">
+      <table class="props" style="min-width:0;">
+        <thead><tr><th>Date</th><th>Player</th><th>Bet</th><th>Event</th><th>Price</th><th>Size</th><th></th></tr></thead>
+        <tbody id="my-bets-tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="my-bets-empty">No bets logged yet.</div>
   </section>"""
 
 
@@ -582,6 +646,7 @@ def _quick_nav() -> str:
     """
     links = [
         ("#reco", "Recommended"),
+        ("#my-bets", "My Bets"),
         ("#props-hr", "HR Props"),
         ("#props-tb", "2+ TB"),
         ("#props-hits", "1+ Hits"),
@@ -698,7 +763,9 @@ def render_html_report(
 
   {_quick_nav()}
 
-  {_recommended_bets_section(strong_recs, speculative_recs, all_props_by_player)}
+  {_recommended_bets_section(strong_recs, speculative_recs, report.game_date.isoformat(), all_props_by_player)}
+
+  {_my_bets_section()}
 
   <section class="section">
     <span class="eyebrow">At a glance</span>
@@ -850,6 +917,105 @@ def render_html_report(
     applyFilters();
   }}
   ['hr', 'tb', 'hits'].forEach(initPropTable);
+
+  // My Bets: entirely client-side, see _take_bet_button's/_my_bets_section's
+  // docstrings in html_report.py for why this stays in localStorage rather
+  // than being recorded anywhere server-side. One JSON array under a single
+  // key - small enough (a real season of taken bets is at most a few
+  // hundred rows) that there's no need for anything fancier.
+  var TAKEN_KEY = 'mlbPropsTakenBets';
+
+  function loadTakenBets() {{
+    try {{
+      var raw = localStorage.getItem(TAKEN_KEY);
+      return raw ? JSON.parse(raw) : [];
+    }} catch (e) {{ return []; }}
+  }}
+  function saveTakenBets(list) {{
+    try {{ localStorage.setItem(TAKEN_KEY, JSON.stringify(list)); }} catch (e) {{ /* storage unavailable (private mode, quota) - the click still updates the page, just won't survive reload */ }}
+  }}
+
+  function renderMyBets() {{
+    var tbody = document.getElementById('my-bets-tbody');
+    if (!tbody) return;
+    var list = loadTakenBets().slice().sort(function(a, b) {{
+      return (b.takenAt || '').localeCompare(a.takenAt || '');
+    }});
+    tbody.innerHTML = '';
+    var totalUnits = 0;
+    list.forEach(function(b) {{
+      totalUnits += (parseFloat(b.units) || 0);
+      var priceText = b.price != null && b.price !== '' ? (parseFloat(b.price) > 0 ? '+' : '') + b.price + ' ' + (b.book || '') : 'n/a';
+      var tr = document.createElement('tr');
+      var cells = [b.gameDate || '', b.player || '', b.marketLabel || '', b.event || '', priceText, (b.units != null ? b.units + 'u' : '')];
+      cells.forEach(function(text, i) {{
+        var td = document.createElement('td');
+        if (i === 1) td.className = 'player';
+        if (i === 3) td.className = 'event';
+        if (i === 4 || i === 5) td.className = 'num';
+        td.textContent = text;
+        tr.appendChild(td);
+      }});
+      var removeTd = document.createElement('td');
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'untake-btn';
+      removeBtn.setAttribute('data-key', b.key);
+      removeBtn.textContent = 'Remove';
+      removeTd.appendChild(removeBtn);
+      tr.appendChild(removeTd);
+      tbody.appendChild(tr);
+    }});
+    var countEl = document.getElementById('my-bets-count');
+    if (countEl) countEl.textContent = list.length + ' bet' + (list.length === 1 ? '' : 's') + ' logged' + (list.length ? ' · ' + (Math.round(totalUnits * 10) / 10) + 'u total' : '');
+    var emptyEl = document.getElementById('my-bets-empty');
+    if (emptyEl) emptyEl.style.display = list.length ? 'none' : '';
+    // Re-sync every "Log this bet" button on the page (today's board only
+    // ever shows today's picks, but a taken bet from a prior day the
+    // button no longer exists for still lives in the log above).
+    document.querySelectorAll('.take-btn').forEach(function(btn) {{
+      var key = btn.getAttribute('data-key');
+      var taken = list.some(function(b) {{ return b.key === key; }});
+      btn.textContent = taken ? '✓ Taken — click to undo' : 'Log this bet';
+      btn.classList.toggle('taken', taken);
+    }});
+  }}
+
+  document.addEventListener('click', function(e) {{
+    var takeBtn = e.target.closest('.take-btn');
+    if (takeBtn) {{
+      var key = takeBtn.getAttribute('data-key');
+      var list = loadTakenBets();
+      var idx = -1;
+      for (var i = 0; i < list.length; i++) {{ if (list[i].key === key) {{ idx = i; break; }} }}
+      if (idx !== -1) {{
+        list.splice(idx, 1);
+      }} else {{
+        list.push({{
+          key: key,
+          player: takeBtn.getAttribute('data-player'),
+          marketLabel: takeBtn.getAttribute('data-market-label'),
+          event: takeBtn.getAttribute('data-event'),
+          gameDate: takeBtn.getAttribute('data-game-date'),
+          price: takeBtn.getAttribute('data-price'),
+          book: takeBtn.getAttribute('data-book'),
+          units: takeBtn.getAttribute('data-units'),
+          takenAt: new Date().toISOString()
+        }});
+      }}
+      saveTakenBets(list);
+      renderMyBets();
+      return;
+    }}
+    var removeBtn = e.target.closest('.untake-btn');
+    if (removeBtn) {{
+      var removeKey = removeBtn.getAttribute('data-key');
+      saveTakenBets(loadTakenBets().filter(function(b) {{ return b.key !== removeKey; }}));
+      renderMyBets();
+    }}
+  }});
+
+  renderMyBets();
 }})();
 </script>
 </body>
