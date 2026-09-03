@@ -178,6 +178,97 @@ class HotStreakProvider(ABC):
         raise NotImplementedError
 
 
+def _woba(rows) -> Optional[float]:
+    if rows is None or len(rows) == 0 or "woba_value" not in rows.columns or "woba_denom" not in rows.columns:
+        return None
+    denom = rows["woba_denom"].sum()
+    if not denom:
+        return None
+    return round(float(rows["woba_value"].sum() / denom), 3)
+
+
+def heat_index_from_log(player: str, log, as_of: date) -> HeatIndex:
+    """Pure computation: given a player's own real per-pitch Statcast log
+    (any `pybaseball.statcast_batter`-shaped DataFrame - `events`/
+    `game_date`/`woba_value`/`woba_denom` columns), compute their real
+    HeatIndex as of `as_of` - the exact z-score/clearance-window logic
+    `StatcastHotStreakProvider.get_heat_index` has always used, extracted
+    so it can be reused against one bulk-fetched log covering many
+    players/dates (see `historical_backtest.py`) without a separate
+    per-player network call for every (player, as_of) pair.
+
+    `log` may span dates AFTER `as_of` (exactly the case for a bulk fetch
+    covering a whole backtest window at once, sliced per player but not
+    per as_of) - this filters to `game_date <= as_of` FIRST, the one
+    thing that keeps this genuinely lookahead-free regardless of how wide
+    a range `log` itself covers. `StatcastHotStreakProvider.get_heat_index`
+    below still fetches its own already-bounded log directly (unchanged
+    behavior, unchanged real network cost for the live per-player path)
+    and this filter is then a no-op for it.
+    """
+    neutral = HeatIndex(player, LEAGUE_AVG_WOBA, LEAGUE_AVG_WOBA, LEAGUE_AVG_WOBA, LEAGUE_AVG_WOBA, 0, 0.0)
+    if log is None or len(log) == 0 or "events" not in log.columns or "game_date" not in log.columns:
+        return neutral
+
+    import pandas as pd  # local import: only needed for this real (non-mock) path
+
+    all_game_dates = pd.to_datetime(log["game_date"])
+    as_of_ts = pd.Timestamp(as_of)
+    log = log[all_game_dates <= as_of_ts]
+    if log.empty:
+        return neutral
+
+    pa_rows = log[log["events"].notna()]
+    if pa_rows.empty:
+        return neutral
+
+    game_dates = pd.to_datetime(pa_rows["game_date"])
+
+    def woba_and_pa_since(days: Optional[int]) -> "tuple[Optional[float], int]":
+        if days is None:
+            subset = pa_rows
+        else:
+            cutoff = pd.Timestamp(as_of - timedelta(days=days))
+            subset = pa_rows[game_dates >= cutoff]
+        return _woba(subset), len(subset)
+
+    season_woba, _ = woba_and_pa_since(None)
+    last30_woba, _ = woba_and_pa_since(30)
+    last15_woba, last15_pa = woba_and_pa_since(15)
+    last7_woba, _ = woba_and_pa_since(7)
+
+    season_woba = season_woba if season_woba is not None else LEAGUE_AVG_WOBA
+    # Shrunk toward 0 for a below-reference last15_pa - see
+    # _shrunk_woba_stdev's docstring. A player with zero real
+    # plate appearances in the window (last15_woba is None) already
+    # falls through to the honest neutral z=0.0, not a guessed streak.
+    z = (last15_woba - season_woba) / _shrunk_woba_stdev(last15_pa) if last15_woba is not None else 0.0
+
+    # Real per-game clearance counts, grouped from the same per-PA log
+    # already fetched above - no extra network cost. String `game_date`
+    # sorts chronologically same as a parsed date would (ISO format),
+    # so grouping directly on it (rather than the parsed `game_dates`
+    # Series) keeps games in real chronological order without a second
+    # column merge.
+    games_events = [list(grp["events"]) for _, grp in pa_rows.groupby("game_date", sort=True)]
+    outcomes = game_outcomes_from_events(games_events)
+    clear_l5, clear_l10, clear_l15, clear_season = clearance_windows_from_outcomes(outcomes)
+
+    return HeatIndex(
+        player=player,
+        season_woba=season_woba,
+        last7_woba=last7_woba if last7_woba is not None else season_woba,
+        last15_woba=last15_woba if last15_woba is not None else season_woba,
+        last30_woba=last30_woba if last30_woba is not None else season_woba,
+        last15_pa=last15_pa,
+        z_score=round(z, 2),
+        clear_l5=clear_l5,
+        clear_l10=clear_l10,
+        clear_l15=clear_l15,
+        clear_season=clear_season,
+    )
+
+
 class StatcastHotStreakProvider(HotStreakProvider):
     """Rolling wOBA windows computed from a player's own season of
     Baseball Savant pitch-level data (`pybaseball.statcast_batter`), the
@@ -197,15 +288,6 @@ class StatcastHotStreakProvider(HotStreakProvider):
             raise RuntimeError("pybaseball is required. Install with `pip install pybaseball pandas`.") from exc
         return pybaseball
 
-    @staticmethod
-    def _woba(rows) -> Optional[float]:
-        if rows is None or len(rows) == 0 or "woba_value" not in rows.columns or "woba_denom" not in rows.columns:
-            return None
-        denom = rows["woba_denom"].sum()
-        if not denom:
-            return None
-        return round(float(rows["woba_value"].sum() / denom), 3)
-
     def get_heat_index(self, player: str, as_of: Optional[date] = None) -> HeatIndex:
         pyb = self._pyb()
         today = as_of or date.today()
@@ -220,60 +302,7 @@ class StatcastHotStreakProvider(HotStreakProvider):
         except Exception:
             logger.exception("statcast_batter fetch failed for %r", player)
             return neutral
-        if log is None or log.empty or "events" not in log.columns or "game_date" not in log.columns:
-            return neutral
-
-        pa_rows = log[log["events"].notna()]
-        if pa_rows.empty:
-            return neutral
-
-        import pandas as pd  # local import: only needed for this real (non-mock) provider
-
-        game_dates = pd.to_datetime(pa_rows["game_date"])
-
-        def woba_and_pa_since(days: Optional[int]) -> "tuple[Optional[float], int]":
-            if days is None:
-                subset = pa_rows
-            else:
-                cutoff = pd.Timestamp(today - timedelta(days=days))
-                subset = pa_rows[game_dates >= cutoff]
-            return self._woba(subset), len(subset)
-
-        season_woba, _ = woba_and_pa_since(None)
-        last30_woba, _ = woba_and_pa_since(30)
-        last15_woba, last15_pa = woba_and_pa_since(15)
-        last7_woba, _ = woba_and_pa_since(7)
-
-        season_woba = season_woba if season_woba is not None else LEAGUE_AVG_WOBA
-        # Shrunk toward 0 for a below-reference last15_pa - see
-        # _shrunk_woba_stdev's docstring. A player with zero real
-        # plate appearances in the window (last15_woba is None) already
-        # falls through to the honest neutral z=0.0, not a guessed streak.
-        z = (last15_woba - season_woba) / _shrunk_woba_stdev(last15_pa) if last15_woba is not None else 0.0
-
-        # Real per-game clearance counts, grouped from the same per-PA log
-        # already fetched above - no extra network cost. String `game_date`
-        # sorts chronologically same as a parsed date would (ISO format),
-        # so grouping directly on it (rather than the parsed `game_dates`
-        # Series) keeps games in real chronological order without a second
-        # column merge.
-        games_events = [list(grp["events"]) for _, grp in pa_rows.groupby("game_date", sort=True)]
-        outcomes = game_outcomes_from_events(games_events)
-        clear_l5, clear_l10, clear_l15, clear_season = clearance_windows_from_outcomes(outcomes)
-
-        return HeatIndex(
-            player=player,
-            season_woba=season_woba,
-            last7_woba=last7_woba if last7_woba is not None else season_woba,
-            last15_woba=last15_woba if last15_woba is not None else season_woba,
-            last30_woba=last30_woba if last30_woba is not None else season_woba,
-            last15_pa=last15_pa,
-            z_score=round(z, 2),
-            clear_l5=clear_l5,
-            clear_l10=clear_l10,
-            clear_l15=clear_l15,
-            clear_season=clear_season,
-        )
+        return heat_index_from_log(player, log, today)
 
 
 class PybaseballHotStreakProvider(HotStreakProvider):

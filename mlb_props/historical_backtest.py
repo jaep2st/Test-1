@@ -2,7 +2,15 @@
 against real MLB history without any risk of lookahead bias:
 `hot_streak.StatcastHotStreakProvider.get_heat_index`'s `as_of` date - it
 was already built to only ever query Statcast data through a given date,
-never after it.
+never after it. This module reuses that same real computation
+(`hot_streak.heat_index_from_log`, extracted specifically so it could be
+reused here) against each real player's own Statcast log, fetched once
+per player for the whole backtest window rather than once per (player,
+game) observation - the fix for a real, measured problem: the first
+version of this re-fetched a player's entire season-to-date log
+separately for every date they appeared, which took ~2 hours for a
+5-day window. See `collect_hot_streak_observations`'s docstring for the
+exact fix.
 
 Everything else in scoring.py (barrel%, hard-hit%, xwOBA, ISO, platoon/
 pitch-mix - most of the model's actual weight) comes from Baseball
@@ -41,9 +49,9 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from .hot_streak import HotStreakProvider
+from ._ids import lookup_mlbam_id
+from .hot_streak import game_outcomes_from_events, heat_index_from_log
 from .report import clearance_rates
-from .results import resolve_player_game_outcome
 from .schedule import MLB_STATS_API_BASE, ScheduleProvider
 
 logger = logging.getLogger(__name__)
@@ -107,12 +115,29 @@ class HotStreakObservation:
     got_hit: bool
 
 
+def _outcome_from_log(log, game_date: date) -> Optional["Tuple[bool, bool, bool]"]:
+    """The real (got_hr, got_2plus_tb, got_hit) outcome for one exact date,
+    read directly out of a player's already-fetched multi-date log - the
+    same real per-game outcome logic `results.resolve_player_game_outcome`
+    uses, just sliced locally instead of a second network fetch for a
+    date this log already covers. `None` (never a guessed False) if the
+    log has no real plate-appearance rows for this exact date - "unknown
+    stays unknown," same convention as the rest of this project.
+    """
+    if log is None or len(log) == 0 or "events" not in log.columns or "game_date" not in log.columns:
+        return None
+    day_rows = log[(log["game_date"] == game_date.isoformat()) & log["events"].notna()]
+    if day_rows.empty:
+        return None
+    return game_outcomes_from_events([list(day_rows["events"])])[0]
+
+
 def collect_hot_streak_observations(
     schedule: ScheduleProvider,
-    hot_streak: HotStreakProvider,
     pyb,
-    session,
     game_dates: List[date],
+    season_start: date,
+    session,
     timeout: float = 10.0,
 ) -> List[HotStreakObservation]:
     """The real collection loop: for every real game on every date in
@@ -120,14 +145,45 @@ def collect_hot_streak_observations(
     boxscore, not a roster guess), compute the hot-streak signal as of
     the day before (`as_of=game_date - 1 day` - excludes this exact game
     from its own "recent form," the one detail that would otherwise make
-    this circular) and resolve what they actually did, reusing
-    `results.resolve_player_game_outcome` (already tested, already the
-    real production path for nightly result resolution) rather than new
-    outcome logic. A player the boxscore lists but whose outcome can't be
-    resolved (shouldn't happen, but real APIs are real APIs) is skipped,
-    not guessed.
+    this circular) and resolve what they actually did.
+
+    The one thing that made the first version of this impractically slow
+    (~2 hours for a 5-day window): it re-fetched a player's ENTIRE
+    season-to-date Statcast log separately for every single date they
+    appeared in `game_dates` - a player who shows up in 5 of this
+    window's games got the same multi-month history re-downloaded 5
+    times, each just a day later than the last. Each real player's log
+    is now fetched exactly ONCE here (`season_start` through the latest
+    date in `game_dates`), cached, and reused both for that player's
+    hot-streak signal (via `hot_streak.heat_index_from_log`, which
+    correctly filters to `game_date <= as_of` on its own - see that
+    function's docstring for why that's still lookahead-safe against a
+    log that spans dates after any individual as_of) and for every one
+    of their real per-game outcomes (via `_outcome_from_log` above) -
+    zero extra network calls either way. A player whose log can't be
+    fetched, or who the boxscore lists but the log has no real outcome
+    for on that exact date (shouldn't happen, but real APIs are real
+    APIs), is skipped for that one observation, not guessed.
     """
     id_cache: Dict[str, Optional[int]] = {}
+    log_cache: Dict[str, object] = {}
+    end_date = max(game_dates)
+
+    def player_log(player: str):
+        if player in log_cache:
+            return log_cache[player]
+        player_id = lookup_mlbam_id(pyb, player, id_cache)
+        if player_id is None:
+            log_cache[player] = None
+            return None
+        try:
+            log = pyb.statcast_batter(season_start.isoformat(), end_date.isoformat(), player_id)
+        except Exception:
+            logger.exception("statcast_batter fetch failed for %r", player)
+            log = None
+        log_cache[player] = log
+        return log
+
     observations: List[HotStreakObservation] = []
     for game_date in game_dates:
         matchups = schedule.get_slate(game_date)
@@ -140,10 +196,12 @@ def collect_hot_streak_observations(
                 logger.exception("Boxscore fetch failed for game_pk=%s (%s @ %s, %s)", matchup.game_pk, matchup.away_team, matchup.home_team, game_date)
                 continue
             for player in batters:
-                heat = hot_streak.get_heat_index(player, as_of=game_date - timedelta(days=1))
-                outcome = resolve_player_game_outcome(pyb, id_cache, player, game_date)
+                log = player_log(player)
+                outcome = _outcome_from_log(log, game_date)
                 if outcome is None:
                     continue
+                got_hr, got_2plus_tb, got_hit = outcome
+                heat = heat_index_from_log(player, log, as_of=game_date - timedelta(days=1))
                 l15_hr, season_hr = clearance_rates(heat, "hr")
                 l15_tb2, season_tb2 = clearance_rates(heat, "tb2")
                 l15_hit, season_hit = clearance_rates(heat, "hit")
@@ -158,9 +216,9 @@ def collect_hot_streak_observations(
                         season_clear_hr_rate=season_hr,
                         season_clear_tb2_rate=season_tb2,
                         season_clear_hit_rate=season_hit,
-                        got_hr=outcome.got_hr,
-                        got_2plus_tb=outcome.got_2plus_tb,
-                        got_hit=outcome.got_hit,
+                        got_hr=got_hr,
+                        got_2plus_tb=got_2plus_tb,
+                        got_hit=got_hit,
                     )
                 )
     return observations

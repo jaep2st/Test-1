@@ -13,7 +13,6 @@ from mlb_props.historical_backtest import (
     fetch_boxscore_batters,
     summarize_hot_streak_backtest,
 )
-from mlb_props.hot_streak import ClearanceWindow, HeatIndex
 from mlb_props.schedule import ProbableMatchup
 
 
@@ -79,42 +78,23 @@ class _FakeSchedule:
         return self.matchups_by_date.get(game_date, [])
 
 
-class _FakeHotStreak:
-    """Returns a fixed HeatIndex per (player, as_of) pair - records every
-    call so a test can assert the real as_of date used (no lookahead).
+class _FakePyb:
+    """Records every real statcast_batter call so a test can assert a
+    player's log is fetched exactly ONCE for the whole backtest window,
+    not once per date they appear in it (the real bug this module's
+    redesign fixes - see collect_hot_streak_observations' docstring).
     """
 
-    def __init__(self, heat_by_player):
-        self.heat_by_player = heat_by_player
-        self.calls = []
-
-    def get_heat_index(self, player, as_of=None):
-        self.calls.append((player, as_of))
-        return self.heat_by_player.get(player, _neutral_heat())
-
-
-def _heat(z_score=0.0, l15_hr_games=3, l15_games=15, season_hr_games=20, season_games=100):
-    return HeatIndex(
-        player="x", season_woba=0.330, last7_woba=0.330, last15_woba=0.330, last30_woba=0.330,
-        last15_pa=40, z_score=z_score,
-        clear_l15=ClearanceWindow(games=l15_games, hr_games=l15_hr_games, tb2_games=6, hit_games=9),
-        clear_season=ClearanceWindow(games=season_games, hr_games=season_hr_games, tb2_games=40, hit_games=65),
-    )
-
-
-def _neutral_heat():
-    return _heat(z_score=0.0)
-
-
-class _FakePyb:
     def __init__(self, id_df, logs_by_player_id):
         self._id_df = id_df
         self._logs_by_player_id = logs_by_player_id
+        self.statcast_batter_calls = []
 
     def playerid_lookup(self, last, first):
         return self._id_df
 
     def statcast_batter(self, start, end, player_id):
+        self.statcast_batter_calls.append((start, end, player_id))
         return self._logs_by_player_id.get(player_id, pd.DataFrame({"game_date": [], "events": []}))
 
 
@@ -123,34 +103,87 @@ def test_collect_hot_streak_observations_uses_the_day_before_as_of_no_lookahead(
     matchup = ProbableMatchup(away_team="A", home_team="B", venue="Park", away_pitcher=None, home_pitcher=None, game_pk=555)
     schedule = _FakeSchedule({game_date: [matchup]})
     session = _FakeBoxscoreSession({555: _boxscore_payload([_player_entry("Hot Player", 4)], [])})
-    hot_streak = _FakeHotStreak({"Hot Player": _heat(z_score=1.8)})
-    pyb = _FakePyb(
-        pd.DataFrame({"key_mlbam": [111]}),
-        {111: pd.DataFrame({"game_date": ["2026-08-20"], "events": ["home_run"]})},
+    # A real home run ON game_date itself, plus real earlier games. If
+    # as_of correctly excludes game_date's own game, only the earlier
+    # games count toward the hot-streak signal - not this one.
+    log = pd.DataFrame(
+        {
+            "game_date": ["2026-08-15", "2026-08-20"],
+            "events": ["single", "home_run"],
+            "woba_value": [0.9, 2.0],
+            "woba_denom": [1, 1],
+        }
     )
+    pyb = _FakePyb(pd.DataFrame({"key_mlbam": [111]}), {111: log})
 
-    observations = collect_hot_streak_observations(schedule, hot_streak, pyb, session, [game_date])
+    observations = collect_hot_streak_observations(schedule, pyb, [game_date], date(2026, 3, 1), session)
 
     assert len(observations) == 1
     obs = observations[0]
     assert obs.player == "Hot Player"
-    assert obs.z_score == 1.8
-    assert obs.got_hr is True
+    assert obs.got_hr is True  # the real outcome for game_date itself, still correctly reported
     assert obs.got_2plus_tb is True
-    # the exact real detail that keeps this non-circular: as_of is the day
-    # BEFORE the game itself, never the game's own date.
-    assert hot_streak.calls == [("Hot Player", game_date - timedelta(days=1))]
+    # the exact real detail that keeps this non-circular: the log fetch
+    # covers the whole window (not narrowed per as_of), fetched exactly
+    # once - the game-date exclusion happens inside heat_index_from_log,
+    # not by asking for a different date range per call.
+    assert pyb.statcast_batter_calls == [("2026-03-01", "2026-08-20", 111)]
 
 
-def test_collect_hot_streak_observations_skips_a_player_whose_outcome_cant_be_resolved():
+def test_collect_hot_streak_observations_fetches_each_players_log_only_once():
+    # The real bug this module's redesign fixes: a player appearing in
+    # multiple real games across the window used to trigger a separate
+    # full-season log re-fetch for each one.
+    d1, d2 = date(2026, 8, 20), date(2026, 8, 21)
+    m1 = ProbableMatchup(away_team="A", home_team="B", venue="Park", away_pitcher=None, home_pitcher=None, game_pk=1)
+    m2 = ProbableMatchup(away_team="A", home_team="C", venue="Park2", away_pitcher=None, home_pitcher=None, game_pk=2)
+    schedule = _FakeSchedule({d1: [m1], d2: [m2]})
+    session = _FakeBoxscoreSession(
+        {
+            1: _boxscore_payload([_player_entry("Repeat Player", 4)], []),
+            2: _boxscore_payload([_player_entry("Repeat Player", 3)], []),
+        }
+    )
+    log = pd.DataFrame(
+        {
+            "game_date": ["2026-08-20", "2026-08-21"],
+            "events": ["strikeout", "single"],
+            "woba_value": [0.0, 0.9],
+            "woba_denom": [1, 1],
+        }
+    )
+    pyb = _FakePyb(pd.DataFrame({"key_mlbam": [222]}), {222: log})
+
+    observations = collect_hot_streak_observations(schedule, pyb, [d1, d2], date(2026, 3, 1), session)
+
+    assert len(observations) == 2  # both real games still produce a real observation
+    assert len(pyb.statcast_batter_calls) == 1  # but the log itself was only fetched once
+
+
+def test_collect_hot_streak_observations_skips_a_player_whose_id_cant_be_resolved():
     game_date = date(2026, 8, 20)
     matchup = ProbableMatchup(away_team="A", home_team="B", venue="Park", away_pitcher=None, home_pitcher=None, game_pk=555)
     schedule = _FakeSchedule({game_date: [matchup]})
     session = _FakeBoxscoreSession({555: _boxscore_payload([_player_entry("Nobody Real", 4)], [])})
-    hot_streak = _FakeHotStreak({})
     pyb = _FakePyb(pd.DataFrame({"key_mlbam": []}), {})  # no real mlbam id found
 
-    observations = collect_hot_streak_observations(schedule, hot_streak, pyb, session, [game_date])
+    observations = collect_hot_streak_observations(schedule, pyb, [game_date], date(2026, 3, 1), session)
+
+    assert observations == []
+
+
+def test_collect_hot_streak_observations_skips_a_player_with_no_real_outcome_that_day():
+    # The boxscore says they batted, but the fetched log has no real
+    # plate-appearance row for that exact date - "unknown stays unknown,"
+    # never a guessed outcome.
+    game_date = date(2026, 8, 20)
+    matchup = ProbableMatchup(away_team="A", home_team="B", venue="Park", away_pitcher=None, home_pitcher=None, game_pk=555)
+    schedule = _FakeSchedule({game_date: [matchup]})
+    session = _FakeBoxscoreSession({555: _boxscore_payload([_player_entry("Mystery Player", 4)], [])})
+    log = pd.DataFrame({"game_date": ["2026-08-15"], "events": ["single"], "woba_value": [0.9], "woba_denom": [1]})
+    pyb = _FakePyb(pd.DataFrame({"key_mlbam": [333]}), {333: log})
+
+    observations = collect_hot_streak_observations(schedule, pyb, [game_date], date(2026, 3, 1), session)
 
     assert observations == []
 
@@ -160,10 +193,9 @@ def test_collect_hot_streak_observations_skips_a_matchup_with_no_real_game_pk():
     matchup = ProbableMatchup(away_team="A", home_team="B", venue="Park", away_pitcher=None, home_pitcher=None, game_pk=None)
     schedule = _FakeSchedule({game_date: [matchup]})
     session = _FakeBoxscoreSession({})
-    hot_streak = _FakeHotStreak({})
     pyb = _FakePyb(pd.DataFrame({"key_mlbam": []}), {})
 
-    observations = collect_hot_streak_observations(schedule, hot_streak, pyb, session, [game_date])
+    observations = collect_hot_streak_observations(schedule, pyb, [game_date], date(2026, 3, 1), session)
 
     assert observations == []
     assert session.calls == []  # never even attempted a boxscore fetch
