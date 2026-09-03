@@ -29,7 +29,7 @@ from .backtest import (
     recorded_at_et,
     resolve_picks,
 )
-from .refit import MIN_PICKS_TO_FIT, RefitResult, refit_all_markets
+from .refit import MIN_PICKS_TO_FIT, BlendResult, RefitResult, fit_all_market_blends, refit_all_markets
 from .site_style import STYLE, nav_html
 
 # Real days of results needed before a weight refit (see scoring.py) would
@@ -210,6 +210,123 @@ def _refit_section(refit_results: List[RefitResult], distinct_days: int) -> str:
   </section>"""
 
 
+def _fmt_loss(x: Optional[float]) -> str:
+    return f"{x:.3f}" if x is not None else "n/a"
+
+
+def _blend_card(r: BlendResult) -> str:
+    label = _MARKET_LABELS.get(r.market, r.market)
+    notes = []
+    if not r.reliable:
+        notes.append(
+            f'<div class="empty">Only {r.n_train} real training row{"s" if r.n_train != 1 else ""} so far '
+            f"(need &ge;{MIN_PICKS_TO_FIT}) - shown for transparency, not yet actionable.</div>"
+        )
+    if r.blended_test_log_loss is None or r.model_only_test_log_loss is None:
+        verdict, verdict_cls = "Not enough held-out picks yet for a real comparison.", ""
+    elif r.improves_on_model_only:
+        verdict = (
+            "Blending in the market's own fair probability measurably beats pure model_prob (today's live "
+            f"behavior) on real held-out data ({r.blended_test_log_loss:.3f} vs {r.model_only_test_log_loss:.3f} "
+            "log-loss, lower is better)."
+        )
+        verdict_cls = "pos"
+    else:
+        verdict = (
+            "Not yet distinguishable from pure model_prob (today's live behavior) on real held-out data "
+            f"({r.blended_test_log_loss:.3f} vs {r.model_only_test_log_loss:.3f} log-loss, lower is better)."
+        )
+        verdict_cls = ""
+    return f"""
+    <div class="method-card">
+      <h3>{_esc(label)} <span class="hint">n={r.n_train} train / {r.n_test} test</span></h3>
+      {''.join(notes)}
+      <div class="{verdict_cls}" style="font-size:13px;margin:6px 0 10px;">{_esc(verdict)}</div>
+      <table class="props" style="min-width:0;">
+        <thead><tr><th>Weight on model_prob (&alpha;)</th><th>Blended log-loss</th><th>Pure model log-loss</th><th>Pure market log-loss</th></tr></thead>
+        <tbody><tr>
+          <td class="num">{r.best_alpha:.1f}</td>
+          <td class="num">{_fmt_loss(r.blended_test_log_loss)}</td>
+          <td class="num">{_fmt_loss(r.model_only_test_log_loss)}</td>
+          <td class="num">{_fmt_loss(r.market_only_test_log_loss)}</td>
+        </tr></tbody>
+      </table>
+    </div>"""
+
+
+def _blend_section(blend_results: List[BlendResult]) -> str:
+    if not blend_results:
+        body = (
+            '<div class="empty">No resolved pick yet carries a real market_fair_prob to blend against - this '
+            "needs a two-sided market price at pick time (see EdgeCandidate's module docstring).</div>"
+        )
+    else:
+        body = '<div class="method-grid">' + "".join(_blend_card(r) for r in blend_results) + "</div>"
+    return f"""
+  <section class="section">
+    <div class="section-head">
+      <h2>Market blend check</h2>
+      <span class="hint">Real log-odds blend of model_prob and the market's own fair probability, on real held-out data</span>
+    </div>
+    {body}
+    <div class="reco-disclosure">
+      <b>Bill Benter's real, documented technique:</b> combine a fundamentals-based model with the market's own
+      odds, since the market already encodes real public information the model doesn't see, rather than trusting
+      either one alone. This is a transparent comparison, never a live behavior change: bet sizing (betting.py)
+      keeps using model_prob exactly as it does today regardless of what's shown here. &alpha; is the fitted
+      weight on model_prob (1 &minus; &alpha; on the market's own fair probability) that minimized real held-out
+      log-loss; &alpha; near 1 means the market adds little beyond what the model already knows, &alpha; near 0
+      means the market is carrying most of the real signal here.
+    </div>
+  </section>"""
+
+
+def _methodology_section() -> str:
+    """A short, factual statement of what's real vs. heuristic vs. proposal-
+    only on this site - answers "is this quality, backed-up data" with
+    something checkable against the actual code, not a claim."""
+    return """
+  <section class="section">
+    <div class="section-head">
+      <h2>Methodology &amp; data sources</h2>
+      <span class="hint">What's real, what's heuristic, and what's a proposal - stated plainly</span>
+    </div>
+    <div class="method-grid">
+      <div class="method-card">
+        <h3>Real data</h3>
+        <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.7;">
+          <li>Batted-ball quality &amp; hot-streak form: Baseball Savant / Statcast</li>
+          <li>Rosters, probable pitchers, real boxscores: MLB Stats API</li>
+          <li>Wind &amp; temperature: Open-Meteo</li>
+          <li>Sportsbook prices &amp; cross-book de-vigged consensus: The Odds API</li>
+        </ul>
+      </div>
+      <div class="method-card">
+        <h3>Heuristic - not calibrated</h3>
+        <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.7;">
+          <li>model_prob: a hand-weighted composite score (mlb_props/scoring.py), never a trained model</li>
+          <li>Ballpark Pal's own model_prob: shown as a second opinion only, never blended in automatically</li>
+        </ul>
+      </div>
+      <div class="method-card">
+        <h3>Validated against real outcomes</h3>
+        <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.7;">
+          <li>Closing-line value (CLV) - the standard proxy for real betting skill, tracked on every priced pick</li>
+          <li>Calibration - predicted probability vs. real observed hit rate, by decile</li>
+          <li>Weight refit &amp; market blend checks - walk-forward held-out log-loss, never a random-shuffle split</li>
+        </ul>
+      </div>
+      <div class="method-card">
+        <h3>Proposal only - never auto-applied</h3>
+        <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.7;">
+          <li>Weight refit and market blend results above: real, validated evidence a human reviews before
+          manually changing scoring.py or betting.py - this site never silently changes its own live behavior.</li>
+        </ul>
+      </div>
+    </div>
+  </section>"""
+
+
 def render_performance_report(data_dir: str, generated_at: Optional[datetime] = None) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
 
@@ -239,6 +356,23 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     )
 
     tiles = [
+        # CLV leads: unlike win rate, closing-line value is the standard way
+        # sharp bettors (and sportsbooks themselves) measure real skill,
+        # since the closing line is the most efficient price a market ever
+        # prints - see the "Methodology & data sources" section below.
+        _tile(
+            "Mean CLV",
+            _fmt_signed_pct(clv.mean_clv_percent) if clv.n else "n/a",
+            f"vs. the closing price, across <b>{clv.n}</b> price{'s' if clv.n != 1 else ''} tracked &mdash; "
+            "the standard proxy for real skill",
+        ),
+        _tile(
+            "Beat the close",
+            _fmt_pct(clv.beat_close_percent / 100.0 if clv.beat_close_percent is not None else None)
+            if clv.n
+            else "n/a",
+            "share of tracked picks priced better than the eventual closing line",
+        ),
         _tile(
             "Resolved picks",
             str(len(resolved)),
@@ -249,18 +383,6 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
             _fmt_pct(overall_rate) if overall_rate is not None else "n/a",
             "share of resolved picks that actually cleared their line",
         ),
-        _tile(
-            "Mean CLV",
-            _fmt_signed_pct(clv.mean_clv_percent) if clv.n else "n/a",
-            f"vs. the closing price, across <b>{clv.n}</b> price{'s' if clv.n != 1 else ''} tracked",
-        ),
-        _tile(
-            "Beat the close",
-            _fmt_pct(clv.beat_close_percent / 100.0 if clv.beat_close_percent is not None else None)
-            if clv.n
-            else "n/a",
-            "share of tracked picks priced better than the eventual closing line",
-        ),
     ]
 
     calib_svg = _calibration_svg(buckets)
@@ -270,6 +392,9 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     hit_rate_hour_html = _hit_rate_table("Real hit rate by hour recorded (ET)", by_hour, {})
     refit_results = refit_all_markets(resolved)
     refit_section_html = _refit_section(refit_results, distinct_days)
+    blend_results = fit_all_market_blends(resolved)
+    blend_section_html = _blend_section(blend_results)
+    methodology_section_html = _methodology_section()
 
     log_rows = []
     for r in sorted(resolved, key=lambda r: (r.pick.game_date, r.pick.player), reverse=True):
@@ -359,6 +484,10 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
   </section>
 
   {refit_section_html}
+
+  {blend_section_html}
+
+  {methodology_section_html}
 
   <section class="section">
     <div class="section-head">
