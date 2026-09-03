@@ -65,6 +65,11 @@ on:
         type: boolean
         required: false
         default: false
+      lineup_diagnostic:
+        description: "Also run --lineup-diagnostic (diagnostic: reports each of today's real games' confirmed-lineup status - see mlb_props/schedule.py's MlbStatsApiScheduleProvider._confirmed_lineup_batters docstring, the real `battingOrder` boxscore field it reads was never confirmed against a real response. Printed to this job's log, not the published report)."
+        type: boolean
+        required: false
+        default: false
       ballparkpal_matchups_check:
         description: "Also run --ballparkpal-matchups-check (diagnostic: prints summary stats for Ballpark Pal's /api/v1/matchups probability fields to resolve whether they're per-PA or per-game; printed to this job's log, not the published report). Requires BALLPARKPAL_API_KEY."
         type: boolean
@@ -268,6 +273,14 @@ jobs:
           # 2026-08-29 to be wrong for at least one real game) - MLB's own
           # schedule endpoint is the actual source of truth for game state.
           python mlb_props_main.py --game-status-check --date "${{ inputs.date || 'today' }}"
+
+      - name: Report today's real confirmed-lineup status per game
+        if: ${{ inputs.lineup_diagnostic }}
+        run: |
+          # Verifies the real `battingOrder` boxscore field before it's
+          # trusted live in scoring - see mlb_props/schedule.py's
+          # MlbStatsApiScheduleProvider._confirmed_lineup_batters docstring.
+          python mlb_props_main.py --lineup-diagnostic --date "${{ inputs.date || 'today' }}" --log-level DEBUG
 
       - name: Check Ballpark Pal matchups probability basis
         if: ${{ inputs.ballparkpal_matchups_check }}

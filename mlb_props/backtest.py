@@ -168,6 +168,18 @@ def hit_rate_by_tier(resolved: List[ResolvedPick]) -> List[HitRateGroup]:
     return _group_hit_rate(resolved, lambda r: r.pick.tier)
 
 
+def hit_rate_by_lineup_source(resolved: List[ResolvedPick]) -> List[HitRateGroup]:
+    """Real hit rate grouped by whether each pick was scored against MLB's
+    real, posted starting lineup ("confirmed") or the active-roster proxy
+    ("active_roster") at pick time - see schedule.py's
+    ProbableMatchup.lineup_source docstring for why this exists. Once
+    enough real data accumulates, this is the real, testable version of
+    "does confirming the lineup first actually help": does the confirmed
+    group's real hit rate come in above the active-roster group's.
+    """
+    return _group_hit_rate(resolved, lambda r: r.pick.lineup_source)
+
+
 def recorded_at_et(pick: PickRecord) -> datetime:
     """`pick.recorded_at` (real ISO 8601 UTC, see PickRecord's docstring)
     converted to real US-Eastern wall-clock time - the actual hour a

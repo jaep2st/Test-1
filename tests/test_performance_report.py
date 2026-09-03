@@ -43,6 +43,7 @@ def test_renders_without_error_on_a_completely_empty_data_dir(tmp_path):
     assert "No resolved pick yet carries real component features" in html
     assert "Market blend check" in html
     assert "No resolved pick yet carries a real market_fair_prob" in html
+    assert "Real hit rate by lineup source" in html
     assert "Methodology" in html
 
 

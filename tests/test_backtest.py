@@ -7,6 +7,7 @@ the JSONL round-trip itself is covered in test_results.py.
 from mlb_props.backtest import (
     calibration_buckets,
     clv_summary,
+    hit_rate_by_lineup_source,
     hit_rate_by_market,
     hit_rate_by_run_hour,
     hit_rate_by_tier,
@@ -17,7 +18,15 @@ from mlb_props.backtest import (
 from mlb_props.results import ClvRecord, GameOutcome, PickRecord
 
 
-def _pick(player, market="batter_home_runs", model_prob=0.15, tier="agree", recorded_at="2026-08-20T18:00:00+00:00", game_date="2026-08-20"):
+def _pick(
+    player,
+    market="batter_home_runs",
+    model_prob=0.15,
+    tier="agree",
+    recorded_at="2026-08-20T18:00:00+00:00",
+    game_date="2026-08-20",
+    lineup_source="active_roster",
+):
     return PickRecord(
         game_date=game_date,
         recorded_at=recorded_at,
@@ -35,6 +44,7 @@ def _pick(player, market="batter_home_runs", model_prob=0.15, tier="agree", reco
         ev_percent_market=15.0,
         edge_vs_market=0.05,
         books_quoting=4,
+        lineup_source=lineup_source,
     )
 
 
@@ -127,6 +137,15 @@ def test_hit_rate_by_tier_groups_correctly():
     groups = {g.key: g for g in hit_rate_by_tier(resolved)}
     assert groups["agree"].n == 1
     assert groups["model_only"].n == 1
+
+
+def test_hit_rate_by_lineup_source_groups_correctly():
+    picks = [_pick("A", lineup_source="confirmed"), _pick("B", lineup_source="active_roster")]
+    results = [_outcome("A", got_hr=True), _outcome("B", got_hr=False)]
+    resolved = resolve_picks(picks, results)
+    groups = {g.key: g for g in hit_rate_by_lineup_source(resolved)}
+    assert groups["confirmed"].hit_rate == 1.0
+    assert groups["active_roster"].hit_rate == 0.0
 
 
 def test_recorded_at_et_converts_real_utc_to_us_eastern():

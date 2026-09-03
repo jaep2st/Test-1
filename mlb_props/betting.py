@@ -153,6 +153,11 @@ class RecommendedBet:
     # page can show *why* this specific bet is recommended, not just that
     # it is. {} for a candidate that predates this field.
     components: Dict[str, float] = field(default_factory=dict)
+    # "confirmed" if this recommendation was scored against MLB's real,
+    # posted starting lineup; "active_roster" (the honest default) if it
+    # was scored against the active-roster proxy instead - see
+    # edges.py's EdgeCandidate.lineup_source.
+    lineup_source: str = "active_roster"
 
 
 def _to_recommendation(e: EdgeCandidate) -> Optional[RecommendedBet]:
@@ -179,6 +184,7 @@ def _to_recommendation(e: EdgeCandidate) -> Optional[RecommendedBet]:
         full_kelly_percent=round(kelly_fraction(e.model_prob, decimal_odds) * 100.0, 2),
         breakeven=breakeven_price(e.model_prob),
         components=e.components,
+        lineup_source=e.lineup_source,
     )
 
 

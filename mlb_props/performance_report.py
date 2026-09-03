@@ -20,6 +20,7 @@ from .backtest import (
     HitRateGroup,
     calibration_buckets,
     clv_summary,
+    hit_rate_by_lineup_source,
     hit_rate_by_market,
     hit_rate_by_run_hour,
     hit_rate_by_tier,
@@ -61,6 +62,10 @@ _TIER_LABELS = {
     "model_only": "Model only",
     "model_only_single_sided": "Model only (single-sided market)",
     "no_market": "No market price",
+}
+_LINEUP_SOURCE_LABELS = {
+    "confirmed": "Lineup confirmed",
+    "active_roster": "Active roster (lineup not posted yet)",
 }
 
 
@@ -339,6 +344,7 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     clv = clv_summary(clv_records)
     by_market = hit_rate_by_market(resolved)
     by_tier = hit_rate_by_tier(resolved)
+    by_lineup_source = hit_rate_by_lineup_source(resolved)
 
     distinct_days = len({r.pick.game_date for r in resolved})
     overall_rate = (sum(1 for r in resolved if r.won) / len(resolved)) if resolved else None
@@ -388,6 +394,7 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     calib_svg = _calibration_svg(buckets)
     hit_rate_market_html = _hit_rate_table("Real hit rate by market", by_market, _MARKET_LABELS)
     hit_rate_tier_html = _hit_rate_table("Real hit rate by tier", by_tier, _TIER_LABELS)
+    hit_rate_lineup_source_html = _hit_rate_table("Real hit rate by lineup source", by_lineup_source, _LINEUP_SOURCE_LABELS)
     by_hour = hit_rate_by_run_hour(resolved)
     hit_rate_hour_html = _hit_rate_table("Real hit rate by hour recorded (ET)", by_hour, {})
     refit_results = refit_all_markets(resolved)
@@ -479,6 +486,7 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     <div class="method-grid">
       {hit_rate_market_html}
       {hit_rate_tier_html}
+      {hit_rate_lineup_source_html}
       {hit_rate_hour_html}
     </div>
   </section>
