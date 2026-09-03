@@ -107,18 +107,16 @@ on:
     # just "us", because ESPN Bet's real odds live under "us2" - see
     # odds_monitor/providers/theoddsapi.py), never a flat per-run cost. A
     # full ~15-game slate costs up to ~90 credits per run that catches it
-    # pregame. On top of that, every run also does a second, separate
-    # only_live=True fetch for the "Live Right Now" section (see
-    # mlb_props/betting.py's build_live_value_bets and
-    # mlb_props_main.py's run_live_value_scan) - up to another ~90 credits
-    # at the runs where most/all of the day's games have already started
-    # (mainly the 6:30pm/10:30pm ET checks; negligible at 11am/12pm ET
-    # when nothing has started yet). Combined, this schedule lands at
-    # roughly ~270-450 credits/day worst case (~8,100-13,500/month) -
-    # still comfortably inside a real paid-tier budget, but adjust
-    # cadence/regions down if your actual plan is closer to the
-    # 500-credit/month free tier. All times below are UTC, since GitHub
-    # Actions schedule: doesn't support local time.
+    # pregame (the site no longer does a separate live-odds fetch every
+    # run - the in-game cross-book "Live Right Now" section was removed
+    # as unreliable with the books this project tracks; --live-odds-scan
+    # remains as a manual, log-only diagnostic, not part of this
+    # schedule). Combined, this schedule lands at roughly ~180-270
+    # credits/day worst case (~5,400-8,100/month) - still comfortably
+    # inside a real paid-tier budget, but adjust cadence/regions down if
+    # your actual plan is closer to the 500-credit/month free tier. All
+    # times below are UTC, since GitHub Actions schedule: doesn't support
+    # local time.
     #
     # 15:00 UTC (~11am ET / 8am PT) - after probable pitchers are typically
     # posted, well before first pitch. Good for the day's early model-only
@@ -366,7 +364,38 @@ jobs:
             echo "No data/ changes this run - nothing to commit."
           else
             git commit -m "Record real pick/result/CLV history for $(TZ=America/New_York date +%Y-%m-%d)"
-            git push origin "HEAD:${{ github.ref_name }}"
+            # Confirmed live (2026-09-02): a plain push here can lose an
+            # entire run's real data/deploy when another run (a manual
+            # workflow_dispatch overlapping the schedule, or two scheduled
+            # runs close together) commits to this branch first - "!
+            # [rejected] HEAD -> main (fetch first)" fails this step, which
+            # skips the deploy job below entirely (needs: build), so that
+            # run's picks/results/CLV are recorded locally but never
+            # pushed and the site never redeploys for it. Retries by
+            # rebasing onto whatever landed in the meantime and pushing
+            # again - safe here because every real conflict this file set
+            # can have is two runs each appending different new lines to
+            # the same date's JSONL, which rebase resolves as a clean
+            # merge on its own; a genuine conflict (extremely unlikely -
+            # would need the exact same line appended differently) aborts
+            # loudly instead of forcing over real recorded history.
+            for attempt in 1 2 3 4; do
+              if git push origin "HEAD:${{ github.ref_name }}"; then
+                break
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                echo "::error::Failed to push real pick/result/CLV history after 4 attempts - see the push errors above."
+                exit 1
+              fi
+              echo "Push rejected (likely a concurrent run's commit landed first) - fetching and rebasing, attempt $attempt"
+              git fetch origin "${{ github.ref_name }}"
+              if ! git rebase "origin/${{ github.ref_name }}"; then
+                echo "::error::Rebase conflict merging real data/ history - won't force over it. Manual resolution needed."
+                git rebase --abort
+                exit 1
+              fi
+              sleep $((2 ** attempt))
+            done
           fi
 
   deploy:
