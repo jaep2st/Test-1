@@ -109,6 +109,12 @@ table.props td.event{ color:var(--ink-muted); font-size:12.5px; white-space:norm
 .tier{ display:inline-block; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; border-radius:5px; padding:2px 6px; margin-top:3px; }
 .tier.agree{ background:var(--positive-tint); color:var(--positive); }
 .tier.model{ background:var(--surface-2); color:var(--ink-muted); }
+/* Real per-pick lineup-freshness signal - see html_report.py's
+   _lineup_source_note docstring for why this matters more than a generic
+   bet-timing rule for player props specifically. */
+.lineup-note{ font-size:10.5px; font-weight:600; margin-top:3px; }
+.lineup-note.lineup-confirmed{ color:var(--positive); }
+.lineup-note.lineup-projected{ color:var(--ink-muted); }
 .verdict{ display:inline-block; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; border-radius:5px; padding:3px 7px; white-space:nowrap; }
 .verdict-strong{ background:var(--positive-tint); color:var(--positive); }
 .verdict-speculative{ background:var(--accent-tint); color:var(--accent-strong); }

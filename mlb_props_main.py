@@ -321,6 +321,39 @@ def run_betstamp_diagnostic(api_key: str, books: Optional[List[str]]) -> str:
     return "\n".join(out)
 
 
+def run_lineup_diagnostic(game_date: date) -> str:
+    """Standalone diagnostic for `--lineup-diagnostic`: fetches today's real
+    slate and, for each game close enough to first pitch to try (see
+    schedule.py's `LINEUP_FETCH_WINDOW_HOURS`), calls
+    MlbStatsApiScheduleProvider's real confirmed-lineup fetch and reports
+    what came back - see that function's docstring: the `battingOrder`
+    field it reads is an educated guess, never confirmed against a real
+    response. The real payload shape (top-level keys, a full sample away-
+    side player entry) is logged unconditionally by that fetch itself now
+    (INFO level, prefixed "LINEUP_DIAGNOSTIC") - that's what actually
+    resolves the guess, not this function's return value. Run with
+    `--log-level DEBUG` (or the default, which already shows INFO) and
+    read those log lines.
+    """
+    schedule = MlbStatsApiScheduleProvider(include_rosters=True)
+    slate = schedule.get_slate(game_date)
+    out = ["LINEUP DIAGNOSTIC", ""]
+    out.append(f"{len(slate)} real game(s) on the {game_date.isoformat()} slate.")
+    if slate:
+        out.append("")
+        confirmed = sum(1 for m in slate if m.lineup_source == "confirmed")
+        out.append(f"{confirmed} of {len(slate)} game(s) had a real confirmed lineup by the time this ran.")
+        out.append("")
+        for m in slate:
+            out.append(
+                f"  - {m.away_team} @ {m.home_team} ({m.game_time_utc or 'no start time'}): "
+                f"lineup_source={m.lineup_source}, {len(m.away_batters)} away / {len(m.home_batters)} home batters"
+            )
+    out.append("")
+    out.append("See the INFO logs above (prefixed LINEUP_DIAGNOSTIC) for the real boxscore response shape.")
+    return "\n".join(out)
+
+
 def run_historical_hot_streak_backtest(start_date: date, end_date: date) -> str:
     """Standalone diagnostic for `--historical-backtest-hot-streak`: the
     one piece of this project's model that can be checked against real
@@ -561,6 +594,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "the accompanying INFO/WARNING logs for the real response shape.",
     )
     parser.add_argument(
+        "--lineup-diagnostic",
+        action="store_true",
+        help="Skip the normal model/report pipeline entirely and instead fetch --date's real slate and report "
+        "each game's real confirmed-lineup status - see mlb_props/schedule.py's "
+        "MlbStatsApiScheduleProvider._confirmed_lineup_batters docstring: the `battingOrder` boxscore field it "
+        "reads is an educated guess, never confirmed against a real response. Diagnostic only - read the "
+        "accompanying INFO logs (prefixed LINEUP_DIAGNOSTIC) for the real response shape.",
+    )
+    parser.add_argument(
         "--historical-backtest-hot-streak",
         action="store_true",
         help="Skip the normal model/report pipeline entirely and instead backtest the hot/cold z-score and "
@@ -692,6 +734,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             with open(args.out, "w") as f:
                 f.write(text + "\n")
             logger.info("Wrote Betstamp diagnostic to %s", args.out)
+        return 0
+
+    if args.lineup_diagnostic:
+        text = run_lineup_diagnostic(args.game_date)
+        print(text)
+        if args.out:
+            with open(args.out, "w") as f:
+                f.write(text + "\n")
+            logger.info("Wrote lineup diagnostic to %s", args.out)
         return 0
 
     if args.historical_backtest_hot_streak:

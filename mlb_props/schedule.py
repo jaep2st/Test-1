@@ -10,12 +10,39 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import date
-from typing import List, Optional
+from datetime import date, datetime, timezone
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 MLB_STATS_API_BASE = "https://statsapi.mlb.com/api/v1"
+
+# How close to a real game's first pitch it's worth spending an extra real
+# network call trying for its confirmed starting lineup - MLB typically
+# posts lineups 1-4 hours before first pitch (see schedule.py's/README's
+# real research on this), so a run many hours out would just waste a call
+# on a game that hasn't posted one yet. Wide enough to comfortably cover
+# that real window without narrowing it so tight a run right at the edge
+# misses a lineup that happened to post a little early.
+LINEUP_FETCH_WINDOW_HOURS = 5.0
+
+
+def _worth_trying_confirmed_lineup(game_time_utc: Optional[str]) -> bool:
+    """True when it's worth spending an extra real network call trying
+    for this game's confirmed starting lineup - within
+    `LINEUP_FETCH_WINDOW_HOURS` of its real first pitch. Fails open
+    (`True`) when `game_time_utc` is missing/unparsable - "try anyway" is
+    the safer default here, not silently never trying for a game whose
+    real start time this project couldn't read.
+    """
+    if not game_time_utc:
+        return True
+    try:
+        start = datetime.fromisoformat(game_time_utc.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    hours_until = (start - datetime.now(timezone.utc)).total_seconds() / 3600.0
+    return hours_until <= LINEUP_FETCH_WINDOW_HOURS
 
 
 @dataclass(frozen=True)
@@ -46,6 +73,15 @@ class ProbableMatchup:
     # own list via cli --batters.
     away_batters: List[str] = field(default_factory=list)
     home_batters: List[str] = field(default_factory=list)
+    # "confirmed" once away_batters/home_batters above are MLB's real,
+    # posted starting lineup for this game (see
+    # MlbStatsApiScheduleProvider._confirmed_lineup_batters) - "active_roster"
+    # (the honest default/fallback) whenever they're still the active-roster
+    # proxy above, because the real lineup hasn't posted yet or the fetch
+    # failed. Threaded through scoring so a real reader can see, per pick,
+    # whether it's scored against MLB's actual starters or a same-day guess -
+    # see mlb_props/edges.py's EdgeCandidate.lineup_source.
+    lineup_source: str = "active_roster"
     # MLB Stats API's own real per-game ID - unused by the live pipeline
     # (which never needs to look a specific game back up), but the one
     # stable key into other real per-game MLB Stats API endpoints (e.g.
@@ -117,6 +153,31 @@ class MlbStatsApiScheduleProvider(ScheduleProvider):
                     venue = game.get("venue", {}).get("name", "")
                     away_pitcher = teams["away"].get("probablePitcher", {}).get("fullName")
                     home_pitcher = teams["home"].get("probablePitcher", {}).get("fullName")
+                    game_time_utc = game.get("gameDate")
+                    game_pk = game.get("gamePk")
+
+                    away_batters = (
+                        self._active_position_players(away_team_id)[: self.max_batters_per_team]
+                        if self.include_rosters
+                        else []
+                    )
+                    home_batters = (
+                        self._active_position_players(home_team_id)[: self.max_batters_per_team]
+                        if self.include_rosters
+                        else []
+                    )
+                    lineup_source = "active_roster"
+                    # Real confirmed lineup, when MLB has posted one and
+                    # it's close enough to first pitch to be worth trying
+                    # (see LINEUP_FETCH_WINDOW_HOURS) - replaces the
+                    # active-roster proxy above for this one game only,
+                    # never silently swapped in when unavailable.
+                    if self.include_rosters and game_pk and _worth_trying_confirmed_lineup(game_time_utc):
+                        confirmed = self._confirmed_lineup_batters(game_pk)
+                        if confirmed is not None:
+                            away_batters, home_batters = confirmed
+                            lineup_source = "confirmed"
+
                     matchups.append(
                         ProbableMatchup(
                             away_team=away,
@@ -124,20 +185,82 @@ class MlbStatsApiScheduleProvider(ScheduleProvider):
                             venue=venue,
                             away_pitcher=away_pitcher,
                             home_pitcher=home_pitcher,
-                            game_time_utc=game.get("gameDate"),
+                            game_time_utc=game_time_utc,
                             status=game.get("status", {}).get("detailedState"),
-                            away_batters=self._active_position_players(away_team_id)[: self.max_batters_per_team]
-                            if self.include_rosters
-                            else [],
-                            home_batters=self._active_position_players(home_team_id)[: self.max_batters_per_team]
-                            if self.include_rosters
-                            else [],
-                            game_pk=game.get("gamePk"),
+                            away_batters=away_batters,
+                            home_batters=home_batters,
+                            lineup_source=lineup_source,
+                            game_pk=game_pk,
                         )
                     )
                 except (KeyError, TypeError):
                     logger.warning("Skipping unparsable schedule entry: %r", game)
         return matchups
+
+    def _confirmed_lineup_batters(self, game_pk: int) -> Optional[Tuple[List[str], List[str]]]:
+        """Real starting-lineup batters for one specific game, split
+        (away, home), once MLB has posted them. Reuses the same real
+        `/game/{game_pk}/boxscore` endpoint
+        `historical_backtest.fetch_boxscore_batters` already fetches
+        successfully post-game (same `teams.{side}.players` traversal),
+        but reads a different real field: `battingOrder` - present on a
+        player's boxscore entry once that player is in today's actual
+        starting lineup, typically 1-4 real hours before first pitch,
+        well before any `plateAppearances` exist (which is what that
+        other function reads instead, for a completed game). NOT YET
+        CONFIRMED against a real response from this sandbox (no network
+        access here) - same disclosed-guess posture as every other new
+        field this project adds; verify with `--lineup-diagnostic` before
+        trusting it fully. Parsing is defensive throughout - an
+        unparsable entry is skipped with a logged warning, never crashes
+        the whole fetch.
+
+        Returns `None` (not `([], [])`) whenever a real confirmed lineup
+        can't be determined - the fetch failed, or MLB hasn't posted a
+        real lineup for this game yet (every player entry lacks a real
+        `battingOrder`). Callers should fall back to the active-roster
+        proxy in that case, never treat `None` as "empty lineup."
+        """
+        try:
+            resp = self.session.get(f"{MLB_STATS_API_BASE}/game/{game_pk}/boxscore", timeout=self.timeout)
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception:
+            logger.info("No confirmed lineup available yet for game_pk=%s (boxscore fetch failed)", game_pk)
+            return None
+
+        # Unconditional real-shape logging (INFO), same convention as
+        # BetstampProvider's own payload logging - what --lineup-diagnostic
+        # actually reads to confirm/correct the `battingOrder` guess above,
+        # not this function's return value.
+        away_players = payload.get("teams", {}).get("away", {}).get("players", {})
+        sample_id, sample_entry = next(iter(away_players.items()), (None, None)) if isinstance(away_players, dict) else (None, None)
+        logger.info(
+            "LINEUP_DIAGNOSTIC game_pk=%s boxscore top-level keys=%s away.players sample (id=%s)=%r",
+            game_pk,
+            sorted(payload.keys()) if isinstance(payload, dict) else type(payload),
+            sample_id,
+            sample_entry,
+        )
+
+        by_side: Dict[str, List[str]] = {"away": [], "home": []}
+        for side in ("away", "home"):
+            players = payload.get("teams", {}).get(side, {}).get("players", {})
+            if not isinstance(players, dict):
+                continue
+            for _player_id, entry in players.items():
+                try:
+                    if not entry.get("battingOrder"):
+                        continue
+                    name = entry.get("person", {}).get("fullName")
+                    if name:
+                        by_side[side].append(name)
+                except (KeyError, TypeError, AttributeError):
+                    logger.warning("Skipping unparsable boxscore player entry for game_pk=%s: %r", game_pk, entry)
+
+        if not by_side["away"] and not by_side["home"]:
+            return None
+        return by_side["away"], by_side["home"]
 
     def _active_position_players(self, team_id: int) -> List[str]:
         """All non-pitchers on a team's active (26-man) roster right now."""

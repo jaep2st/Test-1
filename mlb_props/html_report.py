@@ -172,6 +172,19 @@ def _verdict_badge(has_market_data: bool, tier: str, ev_percent_model: Optional[
     return f'<span class="verdict {css_class}">{_esc(label)}</span>'
 
 
+def _lineup_source_note(lineup_source: str) -> str:
+    """A small, honest per-pick signal for real information-freshness -
+    see schedule.py's ProbableMatchup.lineup_source docstring for exactly
+    why this exists: player-prop edge depends heavily on batting-order/
+    starting status, which MLB only confirms 1-4 real hours before first
+    pitch, so "was this scored against the real lineup or a same-day
+    guess" matters more here than any generic bet-timing rule of thumb.
+    """
+    if lineup_source == "confirmed":
+        return '<div class="lineup-note lineup-confirmed">&#10003; Lineup confirmed</div>'
+    return '<div class="lineup-note lineup-projected">Active roster &mdash; lineup not posted yet</div>'
+
+
 # --- Ballpark-Pal-style colored rating chips -------------------------------
 # A quick "how good is this number" visual signal on the columns that matter
 # most for spotting a real bet (green = best, red = worst, 5 steps) - the
@@ -354,7 +367,7 @@ def _prop_row(
               data-verdict="{verdict_rank}" data-fair="" data-edge="" data-evmarket="" data-books="" data-weather=""
               data-l15="{l15_data}" data-season="{season_data}">
             <td data-k="verdict">{_verdict_badge(e.has_market_data, e.tier, e.ev_percent_model)}</td>
-            <td class="player" data-k="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div>{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
+            <td class="player" data-k="player">{_esc(e.player)}<div class="tier model">Model only &mdash; no market price</div>{_lineup_source_note(e.lineup_source)}{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
             <td class="event secondary-col">{_esc(e.event)}</td><td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>{bp_cell}
             <td colspan="3" class="wx-cell">no book currently quotes this prop</td>
             <td colspan="5" class="secondary-col"></td>
@@ -385,7 +398,7 @@ def _prop_row(
               data-verdict="{verdict_rank}" data-fair="{fair_data}" data-edge="{edge_data}" data-evmarket="{evmarket_data}"
               data-books="{e.books_quoting}" data-weather="{e.weather_boost_pct}" data-l15="{l15_data}" data-season="{season_data}">
             <td data-k="verdict">{_verdict_badge(e.has_market_data, e.tier, e.ev_percent_model)}</td>
-            <td class="player" data-k="player">{_esc(e.player)}{tier}{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
+            <td class="player" data-k="player">{_esc(e.player)}{tier}{_lineup_source_note(e.lineup_source)}{_component_detail_html(e.market, e.components, e.player, e.event, all_props_by_player)}</td>
             <td class="event secondary-col">{_esc(e.event)}</td>
             <td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>
             {bp_cell}
@@ -439,7 +452,7 @@ def _reco_row(r: RecommendedBet, game_date_iso: str, all_props_by_player: Option
     edge_chip = _chip(edge_cell, _edge_bucket(r.edge_vs_market))
     return f"""
       <div class="reco-row">
-        <div><span class="verdict {css_class}" style="margin-right:8px;">{_esc(label)}</span><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div>{_component_detail_html(r.market, r.components, r.player, r.event, all_props_by_player)}</div>
+        <div><span class="verdict {css_class}" style="margin-right:8px;">{_esc(label)}</span><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div>{_lineup_source_note(r.lineup_source)}{_component_detail_html(r.market, r.components, r.player, r.event, all_props_by_player)}</div>
         <div class="event">{_esc(r.event)}</div>
         <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}{_breakeven_cell(r.breakeven)}</div>
         <div class="prob num">{_fmt_pct(r.model_prob)} model<div class="mkt-fair">{_fmt_opt_pct(r.market_fair_prob)} market fair</div></div>

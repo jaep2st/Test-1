@@ -62,22 +62,26 @@ class SlateReport:
 
 
 def _resolve_batters(slate: List[ProbableMatchup], extra_batters: Optional[List[str]]) -> Dict[str, dict]:
-    """Map batter name -> {event, opposing_pitcher, opposing_throws, park, bats_side}.
+    """Map batter name -> {event, opposing_pitcher, opposing_throws, park, bats_side, lineup_source}.
 
     MLB Stats API only posts real lineups shortly before first pitch, so
     well ahead of game time `away_batters`/`home_batters` on each
-    `ProbableMatchup` may be empty. `extra_batters` lets a caller (the CLI's
-    `--batters`) supply names explicitly; they're matched to the first game
-    on the slate if no per-team info is available. Prefer real posted
-    lineups when present.
+    `ProbableMatchup` may still be the active-roster proxy. `extra_batters`
+    lets a caller (the CLI's `--batters`) supply names explicitly; they're
+    matched to the first game on the slate if no per-team info is
+    available, and always carry `lineup_source="active_roster"` (an
+    explicitly-supplied name was never confirmed against a real posted
+    lineup either way). `game.lineup_source` ("confirmed" or
+    "active_roster" - see `ProbableMatchup`'s docstring) is carried
+    through unchanged for every real batter on that game's roster/lineup.
     """
     out: Dict[str, dict] = {}
     for game in slate:
         event = f"{game.away_team} @ {game.home_team}"
         for batter in game.away_batters:
-            out[batter] = dict(event=event, opposing_pitcher=game.home_pitcher, park=game.venue)
+            out[batter] = dict(event=event, opposing_pitcher=game.home_pitcher, park=game.venue, lineup_source=game.lineup_source)
         for batter in game.home_batters:
-            out[batter] = dict(event=event, opposing_pitcher=game.away_pitcher, park=game.venue)
+            out[batter] = dict(event=event, opposing_pitcher=game.away_pitcher, park=game.venue, lineup_source=game.lineup_source)
 
     if extra_batters:
         fallback_game = slate[0] if slate else None
@@ -90,6 +94,7 @@ def _resolve_batters(slate: List[ProbableMatchup], extra_batters: Optional[List[
                 event=f"{fallback_game.away_team} @ {fallback_game.home_team}",
                 opposing_pitcher=fallback_game.home_pitcher,
                 park=fallback_game.venue,
+                lineup_source="active_roster",
             )
     return out
 
@@ -346,9 +351,11 @@ def run_pipeline(
     hits_scores: List[HitsScoreResult] = []
     heat_indices: List[HeatIndex] = []
     event_lookup: Dict[str, str] = {}
+    lineup_source_lookup: Dict[str, str] = {}
 
     for _, batter_name, ctx, batter, pitcher, park_ctx in candidates:
         event_lookup[batter_name] = ctx["event"]
+        lineup_source_lookup[batter_name] = ctx.get("lineup_source", "active_roster")
         # Real HR/fly-ball rate is worth fetching per-player here (only ~30
         # candidates, not the full roster) - see StatcastProvider.
         # enrich_batted_ball's docstring for why it isn't in phase 1.
@@ -424,9 +431,13 @@ def run_pipeline(
     odds_lines = _filter_lines_to_confirmed_pregame_games(odds_lines, slate)
     fair_prices = find_fair_prices(odds_lines)
 
-    hr_edges = rank_candidates(build_hr_edges(hr_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
-    tb_edges = rank_candidates(build_total_bases_edges(tb_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
-    hits_edges = rank_candidates(build_hits_edges(hits_scores, fair_prices, odds_lines, event_lookup), min_ev_percent)
+    hr_edges = rank_candidates(build_hr_edges(hr_scores, fair_prices, odds_lines, event_lookup, lineup_source_lookup), min_ev_percent)
+    tb_edges = rank_candidates(
+        build_total_bases_edges(tb_scores, fair_prices, odds_lines, event_lookup, lineup_source_lookup), min_ev_percent
+    )
+    hits_edges = rank_candidates(
+        build_hits_edges(hits_scores, fair_prices, odds_lines, event_lookup, lineup_source_lookup), min_ev_percent
+    )
 
     heat_indices.sort(key=lambda h: h.z_score, reverse=True)
 

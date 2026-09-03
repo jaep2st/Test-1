@@ -89,6 +89,16 @@ class EdgeCandidate:
     # which is the reason this field exists at all. Defaults to {} so
     # older code/tests constructing an EdgeCandidate without it still work.
     components: Dict[str, float] = field(default_factory=dict)
+    # "confirmed" when this candidate was scored against MLB's real,
+    # posted starting lineup for this game; "active_roster" (the honest
+    # default) when it was scored against the active-roster proxy instead
+    # because the real lineup hadn't posted yet (or the fetch failed) at
+    # run time - see schedule.py's ProbableMatchup.lineup_source and
+    # MlbStatsApiScheduleProvider._confirmed_lineup_batters. Threaded
+    # through to results.py's PickRecord so this project's own real
+    # results can eventually show whether confirmed-lineup picks actually
+    # perform differently - see backtest.py's hit_rate_by_lineup_source.
+    lineup_source: str = "active_roster"
 
     @property
     def has_market_data(self) -> bool:
@@ -195,12 +205,15 @@ def _build_edges(
     fair_prices: List[FairPrice],
     lines: List[PropLine],
     event_lookup: Dict[str, str],
+    lineup_source_lookup: Optional[Dict[str, str]] = None,
 ) -> List[EdgeCandidate]:
     lookup = _fair_price_lookup(fair_prices, market, side, expected_line)
     single_sided = _single_sided_lookup(lines, market, side, expected_line)
+    lineup_source_lookup = lineup_source_lookup or {}
     candidates: List[EdgeCandidate] = []
     for result in scores:
         key = result.player.strip().lower()
+        lineup_source = lineup_source_lookup.get(result.player, "active_roster")
         fp = lookup.get(key)
         if fp is None:
             single = single_sided.get(key)
@@ -227,6 +240,7 @@ def _build_edges(
                     weather_boost_pct=result.weather_boost_pct,
                     bp_model_prob=result.bp_model_prob,
                     components=result.components,
+                    lineup_source=lineup_source,
                 )
             )
             continue
@@ -252,27 +266,42 @@ def _build_edges(
                 weather_boost_pct=result.weather_boost_pct,
                 bp_model_prob=result.bp_model_prob,
                 components=result.components,
+                lineup_source=lineup_source,
             )
         )
     return candidates
 
 
 def build_hr_edges(
-    scores: List[HRScoreResult], fair_prices: List[FairPrice], lines: List[PropLine], event_lookup: Dict[str, str]
+    scores: List[HRScoreResult],
+    fair_prices: List[FairPrice],
+    lines: List[PropLine],
+    event_lookup: Dict[str, str],
+    lineup_source_lookup: Optional[Dict[str, str]] = None,
 ) -> List[EdgeCandidate]:
-    return _build_edges(scores, MARKET_HOME_RUN, "yes", HOME_RUN_LINE_FOR_1PLUS, fair_prices, lines, event_lookup)
+    return _build_edges(scores, MARKET_HOME_RUN, "yes", HOME_RUN_LINE_FOR_1PLUS, fair_prices, lines, event_lookup, lineup_source_lookup)
 
 
 def build_total_bases_edges(
-    scores: List[TotalBasesScoreResult], fair_prices: List[FairPrice], lines: List[PropLine], event_lookup: Dict[str, str]
+    scores: List[TotalBasesScoreResult],
+    fair_prices: List[FairPrice],
+    lines: List[PropLine],
+    event_lookup: Dict[str, str],
+    lineup_source_lookup: Optional[Dict[str, str]] = None,
 ) -> List[EdgeCandidate]:
-    return _build_edges(scores, MARKET_TOTAL_BASES, "over", TOTAL_BASES_LINE_FOR_2PLUS, fair_prices, lines, event_lookup)
+    return _build_edges(
+        scores, MARKET_TOTAL_BASES, "over", TOTAL_BASES_LINE_FOR_2PLUS, fair_prices, lines, event_lookup, lineup_source_lookup
+    )
 
 
 def build_hits_edges(
-    scores: List[HitsScoreResult], fair_prices: List[FairPrice], lines: List[PropLine], event_lookup: Dict[str, str]
+    scores: List[HitsScoreResult],
+    fair_prices: List[FairPrice],
+    lines: List[PropLine],
+    event_lookup: Dict[str, str],
+    lineup_source_lookup: Optional[Dict[str, str]] = None,
 ) -> List[EdgeCandidate]:
-    return _build_edges(scores, MARKET_HITS, "over", HITS_LINE_FOR_1PLUS, fair_prices, lines, event_lookup)
+    return _build_edges(scores, MARKET_HITS, "over", HITS_LINE_FOR_1PLUS, fair_prices, lines, event_lookup, lineup_source_lookup)
 
 
 def rank_candidates(candidates: List[EdgeCandidate], min_ev_percent: float = 0.0) -> List[EdgeCandidate]:

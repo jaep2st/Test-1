@@ -79,6 +79,13 @@ class PickRecord:
     # outcomes; before this field, REFIT_READY_DAYS could never actually
     # trigger anything, no matter how many days passed.
     components: Dict[str, float] = field(default_factory=dict)
+    # "confirmed" if this pick was scored against MLB's real, posted
+    # starting lineup at pick time; "active_roster" (the honest default)
+    # if it was scored against the active-roster proxy instead - see
+    # EdgeCandidate.lineup_source's docstring. "active_roster" for any
+    # pick recorded before this field existed too - an honest default,
+    # not a claim it was actually confirmed.
+    lineup_source: str = "active_roster"
 
     @property
     def key(self) -> Tuple[str, str, str]:
@@ -188,6 +195,7 @@ def _pick_record(game_date: date, recorded_at: datetime, e: EdgeCandidate) -> Pi
         edge_vs_market=e.edge_vs_market,
         books_quoting=e.books_quoting,
         components=e.components,
+        lineup_source=e.lineup_source,
     )
 
 
