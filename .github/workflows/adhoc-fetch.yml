@@ -42,7 +42,7 @@ jobs:
       - name: Plain HTTP GET
         if: ${{ !inputs.render_js }}
         run: |
-          curl -sSL --max-time 30 -A "Mozilla/5.0 (research fetch)" -D - "${{ inputs.url }}" | head -c 200000
+          curl -sSL --max-time 30 -A "Mozilla/5.0 (research fetch)" "${{ inputs.url }}" | tail -c 100000
 
       - uses: actions/setup-python@v5
         if: ${{ inputs.render_js }}
