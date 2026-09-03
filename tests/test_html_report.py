@@ -43,9 +43,9 @@ def test_html_report_is_well_formed_and_self_contained():
 
 def test_html_report_has_a_quick_nav_linking_every_section():
     html_text = render_html_report(_report())
-    for anchor in ("#reco", "#props-hr", "#props-tb", "#props-hits", "#envs", "#hot", "#method"):
+    for anchor in ("#reco", "#my-bets", "#props-hr", "#props-tb", "#props-hits", "#envs", "#hot", "#method"):
         assert f'href="{anchor}"' in html_text, f"quick-nav is missing a link to {anchor}"
-    for section_id in ("reco", "props-hr", "props-tb", "props-hits", "envs", "hot", "method"):
+    for section_id in ("reco", "my-bets", "props-hr", "props-tb", "props-hits", "envs", "hot", "method"):
         assert f'id="{section_id}"' in html_text, f"no element on the page actually has id={section_id!r}"
 
 
@@ -243,7 +243,7 @@ def test_html_report_recommended_bets_show_the_real_market_fair_value():
         tier="agree", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=10.0,
         best_price=200, best_book="draftkings", books_quoting=2, units=1.0, full_kelly_percent=4.0, breakeven=400,
     )
-    row_html = _reco_row(r)
+    row_html = _reco_row(r, "2026-08-20")
     assert "15.0% market fair" in row_html
     assert "verdict-strong" in row_html
 
@@ -358,7 +358,7 @@ def test_html_report_recommended_bets_market_fair_is_honestly_na_when_absent():
         ev_percent_model=10.0, best_price=200, best_book="draftkings", books_quoting=1, units=1.0,
         full_kelly_percent=4.0, breakeven=400,
     )
-    row_html = _reco_row(r)
+    row_html = _reco_row(r, "2026-08-20")
     assert "n/a market fair" in row_html
     assert "verdict-speculative" in row_html
 
@@ -375,7 +375,7 @@ def test_reco_group_caps_visible_rows_and_defers_the_rest():
         )
 
     recs = [_bet(i) for i in range(_RECO_VISIBLE_CAP + 3)]
-    html_text = _reco_group("Strong plays", "hint", recs)
+    html_text = _reco_group("Strong plays", "hint", recs, "2026-08-20")
     for r in recs[:_RECO_VISIBLE_CAP]:
         assert r.player in html_text
     assert "Show 3 more" in html_text
@@ -394,7 +394,7 @@ def test_reco_group_shows_no_expander_at_or_under_the_cap():
         )
 
     recs = [_bet(i) for i in range(_RECO_VISIBLE_CAP)]
-    html_text = _reco_group("Strong plays", "hint", recs)
+    html_text = _reco_group("Strong plays", "hint", recs, "2026-08-20")
     assert "reco-more" not in html_text
     for r in recs:
         assert r.player in html_text
@@ -465,9 +465,41 @@ def test_html_report_recommended_bets_carry_a_real_why_drilldown():
         best_price=200, best_book="draftkings", books_quoting=2, units=1.0, full_kelly_percent=4.0,
         breakeven=400, components={"barrel_pct": 80.0, "hard_hit_pct": 50.0},
     )
-    row_html = _reco_row(r)
+    row_html = _reco_row(r, "2026-08-20")
     assert "expand-toggle" in row_html
     assert "Barrel %" in row_html
+
+
+def test_reco_row_carries_a_take_bet_button_with_a_stable_key():
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _reco_row
+
+    r = RecommendedBet(
+        player="Player A", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+        tier="agree", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=10.0,
+        best_price=200, best_book="draftkings", books_quoting=2, units=1.5, full_kelly_percent=4.0, breakeven=400,
+    )
+    row_html = _reco_row(r, "2026-08-20")
+    assert 'class="take-btn"' in row_html
+    assert 'data-key="2026-08-20|batter_home_runs|player a|team a @ team b"' in row_html
+    assert 'data-units="1.5"' in row_html
+    assert 'data-price="200"' in row_html
+    assert 'data-book="draftkings"' in row_html
+    # Same pick rendered for a different game_date (this project's report
+    # is regenerated fresh per real day) must get a different key - never
+    # collide with a different day's identical pick.
+    other_day_html = _reco_row(r, "2026-08-21")
+    assert 'data-key="2026-08-21|batter_home_runs|player a|team a @ team b"' in other_day_html
+
+
+def test_html_report_has_a_my_bets_section_with_local_storage_js():
+    html_text = render_html_report(_report())
+    assert 'id="my-bets"' in html_text
+    assert 'id="my-bets-tbody"' in html_text
+    assert "localStorage" in html_text
+    assert "mlbPropsTakenBets" in html_text
+    # Never mixed into the project's own real, server-recorded track record.
+    assert "server-recorded performance tracking" in html_text
 
 
 def test_html_report_recommended_bets_empty_state_is_honest_not_hidden():
@@ -493,6 +525,6 @@ def test_html_report_escapes_malicious_player_name_in_recommended_bets():
         edge_vs_market=0.05, ev_percent_model=10.0, best_price=200, best_book="draftkings",
         books_quoting=2, units=1.0, full_kelly_percent=4.0, breakeven=400,
     )
-    row_html = _reco_row(malicious)
+    row_html = _reco_row(malicious, "2026-08-20")
     assert "<script>alert(1)</script>" not in row_html
     assert "&lt;script&gt;" in row_html

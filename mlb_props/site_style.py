@@ -252,6 +252,15 @@ input.view-toggle:checked ~ .table-scroll .secondary-col{ display:table-cell; }
 .reco-more[open] summary{ border-bottom:1px solid var(--border); }
 .reco-disclosure{ font-size:12.5px; color:var(--ink-muted); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin-top:16px; }
 .reco-disclosure b{ color:var(--ink); }
+
+/* --- My Bets: a client-side-only "I took this" toggle (see
+   _take_bet_button's docstring in html_report.py for why this never
+   writes anywhere server-side) --- */
+.take-btn{ margin-top:8px; font:inherit; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; padding:5px 9px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--ink-muted); cursor:pointer; white-space:nowrap; }
+.take-btn:hover{ border-color:var(--accent); color:var(--accent-strong); }
+.take-btn.taken{ background:var(--positive-tint); border-color:var(--positive); color:var(--positive); }
+.untake-btn{ font:inherit; font-size:11px; font-weight:600; padding:4px 9px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--ink-muted); cursor:pointer; white-space:nowrap; }
+.untake-btn:hover{ border-color:var(--negative); color:var(--negative); }
 @media (max-width:760px){
   .reco-row{ grid-template-columns:1fr 1fr; grid-template-areas:"who units" "bet bet" "event event" "price prob"; row-gap:6px; }
   .reco-row .who{ grid-area:who; }
