@@ -216,6 +216,57 @@ def test_rank_candidates_still_filters_when_a_positive_threshold_is_explicit():
     assert ranked == []
 
 
+def test_a_single_book_two_sided_market_never_earns_the_agree_tier():
+    # Real user report (2026-09-03): a report scored Angel Genao's 1+ HR
+    # prop as tier == "agree" ("STRONG BET") off ESPN BET's price alone
+    # (books_quoting=1 - the only book that had posted the market yet).
+    # find_fair_prices() can produce a real FairPrice from just one book's
+    # two-sided quote, but one book's own number is not a "the market
+    # agrees" signal - Fanatics posted +1500 for the exact same bet not
+    # long after, more than 60% better than the +900 this project called
+    # "strong". A real edge against a thin, one-book price should still
+    # surface (it's real, live market data), just not with false
+    # cross-book confidence.
+    lines = [
+        _single_sided_hr_line(odds=650, book="draftkings"),  # yes
+        PropLine(
+            player="Aaron Judge", team=None, league="mlb", market=MARKET_HOME_RUN, side="no",
+            line=0.5, odds=-900, sportsbook="draftkings", event="Houston Astros @ New York Yankees",
+        ),
+    ]
+    edges = build_hr_edges([_hr_score(model_prob=0.20)], find_fair_prices(lines), lines, event_lookup={})
+
+    edge = edges[0]
+    assert edge.books_quoting == 1
+    assert edge.market_fair_prob is not None  # a real FairPrice did get computed
+    assert edge.ev_percent_model is not None and edge.ev_percent_model > 0
+    assert edge.edge_vs_market is not None and edge.edge_vs_market > 0
+    assert edge.tier == "model_only"  # not "agree" - one book isn't a consensus
+
+
+def test_a_second_independent_book_does_earn_the_agree_tier():
+    # Same real edge as above, but now a second book (Fanatics) also
+    # quotes both sides - a genuine second opinion, so this really is
+    # "the market agrees" now.
+    lines = [
+        _single_sided_hr_line(odds=650, book="draftkings"),
+        PropLine(
+            player="Aaron Judge", team=None, league="mlb", market=MARKET_HOME_RUN, side="no",
+            line=0.5, odds=-900, sportsbook="draftkings", event="Houston Astros @ New York Yankees",
+        ),
+        _single_sided_hr_line(odds=600, book="fanatics"),
+        PropLine(
+            player="Aaron Judge", team=None, league="mlb", market=MARKET_HOME_RUN, side="no",
+            line=0.5, odds=-800, sportsbook="fanatics", event="Houston Astros @ New York Yankees",
+        ),
+    ]
+    edges = build_hr_edges([_hr_score(model_prob=0.20)], find_fair_prices(lines), lines, event_lookup={})
+
+    edge = edges[0]
+    assert edge.books_quoting == 2
+    assert edge.tier == "agree"
+
+
 def test_hits_edge_uses_the_standard_line_not_a_longer_shot_tier():
     # Confirmed live (2026-08-29): a real book posts genuine two-sided
     # pricing at multiple point tiers (1+ hits AND 2+ hits) - the standard

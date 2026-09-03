@@ -27,3 +27,13 @@ def test_detail_panel_never_wider_than_the_viewport():
     # Belt-and-suspenders: on a narrow (mobile) screen, the panel shrinks
     # to fit rather than relying on horizontal scroll to reach it at all.
     assert "max-width:min(380px, calc(100vw - 48px))" in STYLE
+
+
+def test_thin_market_note_is_styled_as_a_real_warning():
+    # Real user report (2026-09-03): a "STRONG BET" was priced off a
+    # single book with no visible flag that it was thin - this style is
+    # what makes html_report.py's books-note-thin actually read as a
+    # warning (var(--negative)) rather than blending in with the muted
+    # breakeven/market-fair text it sits next to.
+    assert ".books-note-thin{" in STYLE
+    assert ".books-thin{" in STYLE

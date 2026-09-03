@@ -14,8 +14,13 @@ just variance in outcomes. Two further, more conservative-than-typical
 choices on top of that:
 
 1. A "strong" pick (tier == "agree" - both this project's own model AND
-   the market's own cross-book no-vig consensus see value) is sized at
-   quarter-Kelly (0.25x). A "speculative" pick (model_only/
+   a real cross-book no-vig consensus, from at least
+   edges.MIN_BOOKS_FOR_MARKET_AGREE independent books, see value) is sized
+   at quarter-Kelly (0.25x) - a single book's price doesn't qualify as
+   "the market agrees" no matter how good the math looks against it; see
+   that constant's docstring for a real case where trusting one book's
+   early number this way missed a much better price a second book posted
+   shortly after. A "speculative" pick (model_only/
    model_only_single_sided - only this project's own heuristic sees it,
    with no market corroboration) is sized at an extra half of that
    (0.125x, effectively 1/8-Kelly) - Kelly math assumes model_prob IS the
