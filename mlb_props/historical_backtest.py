@@ -46,12 +46,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from ._ids import lookup_mlbam_id
 from .hot_streak import game_outcomes_from_events, heat_index_from_log
 from .report import clearance_rates
+from .results import _append_jsonl, _load_jsonl
 from .schedule import MLB_STATS_API_BASE, ScheduleProvider
 
 logger = logging.getLogger(__name__)
@@ -268,3 +269,83 @@ def summarize_hot_streak_backtest(observations: List[HotStreakObservation]) -> s
     out.append("in every market, not just by chance in one. Small buckets (roughly n<30) are noisy - read the split")
     out.append("as suggestive, not conclusive, until this has run across more real dates.")
     return "\n".join(out)
+
+
+@dataclass(frozen=True)
+class HistoricalBacktestRun:
+    """One full `--historical-backtest-hot-streak` run's real summary
+    stats, persisted to `data/historical_backtest/runs.jsonl` (see
+    `record_historical_backtest_run`) so this evidence accumulates across
+    runs instead of scrolling away the moment the workflow step's log
+    disappears - the same "the git repo is the database" convention
+    `results.py` already uses for picks/results/CLV. Every rate here is
+    the exact real number `summarize_hot_streak_backtest` already prints;
+    this is that same computation, structured for storage and re-display
+    (see `performance_report.py`'s historical-backtest section) instead
+    of only ever appearing as one run's console text.
+    """
+
+    run_at: str  # ISO 8601 UTC, when this backtest was executed
+    start_date: str  # inclusive
+    end_date: str  # inclusive
+    n_observations: int
+    # {"hr": 0.10, "tb2": 0.32, "hit": 0.57} - the real overall base rates
+    # every bucket below has to beat/undershoot for the signal to be real.
+    overall_rates: Dict[str, float]
+    # {"Hot (z >= +1.0)": {"n": 627, "hr": 0.129, "tb2": 0.344, "hit": 0.603}, ...}
+    # - same three buckets/order as _bucket_by_z, real n disclosed per
+    # bucket so a reader can judge for themselves whether it's noise.
+    buckets: Dict[str, Dict[str, float]]
+
+
+def build_historical_backtest_run(
+    observations: List[HotStreakObservation], start_date: date, end_date: date, run_at: Optional[datetime] = None
+) -> Optional[HistoricalBacktestRun]:
+    """The same real computation `summarize_hot_streak_backtest` prints,
+    structured into a `HistoricalBacktestRun` instead of formatted text -
+    see that function for the exact same bucket logic/thresholds. `None`
+    for zero real observations (nothing real to persist), same "don't
+    write a phantom record" convention as `results.record_picks` et al.
+    """
+    if not observations:
+        return None
+    run_at = run_at or datetime.now(timezone.utc)
+    n = len(observations)
+
+    def rates(group: List[HotStreakObservation]) -> Dict[str, float]:
+        gn = len(group)
+        return {
+            "hr": round(sum(o.got_hr for o in group) / gn, 4),
+            "tb2": round(sum(o.got_2plus_tb for o in group) / gn, 4),
+            "hit": round(sum(o.got_hit for o in group) / gn, 4),
+        }
+
+    buckets = {}
+    for label, group in _bucket_by_z(observations):
+        bucket_rates = {"n": len(group)}
+        if group:
+            bucket_rates.update(rates(group))
+        buckets[label] = bucket_rates
+
+    return HistoricalBacktestRun(
+        run_at=run_at.isoformat(),
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        n_observations=n,
+        overall_rates=rates(observations),
+        buckets=buckets,
+    )
+
+
+def record_historical_backtest_run(run: Optional[HistoricalBacktestRun], out_path: str) -> int:
+    """Appends one real backtest run's summary to `out_path` (a JSONL
+    file, same convention as results.py's picks/results/CLV history).
+    `None` (the zero-observations case) writes nothing and returns 0 -
+    never a phantom record for a run that found nothing real."""
+    if run is None:
+        return 0
+    return _append_jsonl([run], out_path)
+
+
+def load_historical_backtest_runs(path: str) -> List[HistoricalBacktestRun]:
+    return _load_jsonl(path, HistoricalBacktestRun)

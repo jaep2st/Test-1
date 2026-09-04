@@ -44,7 +44,36 @@ def test_renders_without_error_on_a_completely_empty_data_dir(tmp_path):
     assert "Market blend check" in html
     assert "No resolved pick yet carries a real market_fair_prob" in html
     assert "Real hit rate by lineup source" in html
+    assert "Historical hot-streak signal backtest" in html
+    assert 'No historical backtest run yet' in html
     assert "Methodology" in html
+
+
+def test_shows_the_real_historical_backtest_run_when_one_was_recorded(tmp_path):
+    from datetime import date
+
+    from mlb_props.historical_backtest import build_historical_backtest_run, record_historical_backtest_run
+
+    def obs(player, z, got_hr):
+        from mlb_props.historical_backtest import HotStreakObservation
+
+        return HotStreakObservation(
+            game_date="2026-08-20", player=player, z_score=z,
+            l15_clear_hr_rate=None, l15_clear_tb2_rate=None, l15_clear_hit_rate=None,
+            season_clear_hr_rate=None, season_clear_tb2_rate=None, season_clear_hit_rate=None,
+            got_hr=got_hr, got_2plus_tb=False, got_hit=got_hr,
+        )
+
+    observations = [obs("Hot A", 1.5, True), obs("Cold A", -1.5, False)]
+    run = build_historical_backtest_run(observations, date(2026, 8, 15), date(2026, 9, 3))
+    record_historical_backtest_run(run, str(tmp_path / "historical_backtest" / "runs.jsonl"))
+
+    html = render_performance_report(str(tmp_path))
+
+    assert "2026-08-15" in html
+    assert "2026-09-03" in html
+    assert "n=2 real (player, game) observations" in html
+    assert "No historical backtest run yet" not in html
 
 
 def test_clv_tiles_lead_the_at_a_glance_tiles(tmp_path):
