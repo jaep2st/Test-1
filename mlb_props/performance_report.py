@@ -12,6 +12,7 @@ normal state for a while, not hidden.
 from __future__ import annotations
 
 import html
+import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -30,6 +31,7 @@ from .backtest import (
     recorded_at_et,
     resolve_picks,
 )
+from .historical_backtest import HistoricalBacktestRun, load_historical_backtest_runs
 from .market import book_display_name
 from .refit import MIN_PICKS_TO_FIT, BlendResult, RefitResult, fit_all_market_blends, refit_all_markets
 from .site_style import STYLE, nav_html
@@ -287,6 +289,84 @@ def _blend_section(blend_results: List[BlendResult]) -> str:
   </section>"""
 
 
+_BUCKET_ORDER = ["Hot (z >= +1.0)", "Neutral (-1.0 < z < +1.0)", "Cold (z <= -1.0)"]
+_BUCKET_SHORT_LABELS = {"Hot (z >= +1.0)": "Hot", "Neutral (-1.0 < z < +1.0)": "Neutral", "Cold (z <= -1.0)": "Cold"}
+
+
+def _historical_backtest_section(runs: List[HistoricalBacktestRun]) -> str:
+    """Real hot/cold z-score signal backtest results (see
+    historical_backtest.py) - unlike everything else on this page, this
+    isn't live-forward pick tracking, it's a direct check against already-
+    played real MLB history, run on demand via `--historical-backtest-
+    hot-streak` (not part of the regular schedule - see that workflow
+    input's own description). Persisted (`record_historical_backtest_run`)
+    so a run's real evidence stays visible here instead of only ever
+    existing as one run's console text.
+    """
+    if not runs:
+        body = (
+            '<div class="empty">No historical backtest run yet - trigger the "historical_backtest_hot_streak" '
+            "workflow_dispatch input with a real date range to check whether the hot/cold z-score signal actually "
+            "predicted real past MLB games (see mlb_props/historical_backtest.py).</div>"
+        )
+        return f"""
+  <section class="section">
+    <div class="section-head">
+      <h2>Historical hot-streak signal backtest</h2>
+      <span class="hint">Does the real hot/cold z-score signal actually predict already-played MLB history?</span>
+    </div>
+    {body}
+  </section>"""
+
+    latest = max(runs, key=lambda r: r.run_at)
+    rows = []
+    overall = latest.overall_rates
+    rows.append(
+        "<tr><td>Overall baseline</td><td class=\"num\">-</td>"
+        f'<td class="num">{_fmt_pct(overall.get("hr"))}</td><td class="num">{_fmt_pct(overall.get("tb2"))}</td>'
+        f'<td class="num">{_fmt_pct(overall.get("hit"))}</td></tr>'
+    )
+    for label in _BUCKET_ORDER:
+        b = latest.buckets.get(label, {})
+        n = int(b.get("n", 0))
+        rows.append(
+            f"<tr><td>{_esc(_BUCKET_SHORT_LABELS[label])}</td><td class=\"num\">{n}</td>"
+            f'<td class="num">{_fmt_pct(b.get("hr")) if n else "n/a"}</td>'
+            f'<td class="num">{_fmt_pct(b.get("tb2")) if n else "n/a"}</td>'
+            f'<td class="num">{_fmt_pct(b.get("hit")) if n else "n/a"}</td></tr>'
+        )
+    table = f"""
+      <table class="props" style="min-width:0;">
+        <thead><tr><th>Bucket</th><th>n</th><th>1+ HR</th><th>2+ TB</th><th>1+ Hit</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>"""
+
+    other_runs_note = ""
+    if len(runs) > 1:
+        other_runs_note = f'<div class="hint" style="margin-top:8px;">{len(runs)} real backtest runs recorded total - showing the most recent.</div>'
+
+    return f"""
+  <section class="section">
+    <div class="section-head">
+      <h2>Historical hot-streak signal backtest</h2>
+      <span class="hint">Does the real hot/cold z-score signal actually predict already-played MLB history?</span>
+    </div>
+    <div class="method-card">
+      <h3>{_esc(latest.start_date)} to {_esc(latest.end_date)} <span class="hint">n={latest.n_observations} real (player, game) observations</span></h3>
+      {table}
+      {other_runs_note}
+    </div>
+    <div class="reco-disclosure">
+      <b>Read this like the calibration chart above:</b> if the signal is real, "Hot" rates should sit above the
+      overall baseline and "Cold" below it, in every market, not just by chance in one. Computed as of the day
+      BEFORE each real game (see hot_streak.py's as_of parameter) - no lookahead. Small buckets (roughly n&lt;30)
+      are noisy; read a small split as suggestive; never conclusive. This is a real, direct check against already-
+      played history, not live-forward tracking - it doesn't accumulate on its own the way the rest of this page
+      does, only when this diagnostic is run again.
+    </div>
+  </section>"""
+
+
 def _methodology_section() -> str:
     """A short, factual statement of what's real vs. heuristic vs. proposal-
     only on this site - answers "is this quality, backed-up data" with
@@ -402,6 +482,8 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     refit_section_html = _refit_section(refit_results, distinct_days)
     blend_results = fit_all_market_blends(resolved)
     blend_section_html = _blend_section(blend_results)
+    historical_backtest_runs = load_historical_backtest_runs(os.path.join(data_dir, "historical_backtest", "runs.jsonl"))
+    historical_backtest_section_html = _historical_backtest_section(historical_backtest_runs)
     methodology_section_html = _methodology_section()
 
     log_rows = []
@@ -495,6 +577,8 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
   {refit_section_html}
 
   {blend_section_html}
+
+  {historical_backtest_section_html}
 
   {methodology_section_html}
 

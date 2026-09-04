@@ -354,17 +354,30 @@ def run_lineup_diagnostic(game_date: date) -> str:
     return "\n".join(out)
 
 
-def run_historical_hot_streak_backtest(start_date: date, end_date: date) -> str:
+def run_historical_hot_streak_backtest(start_date: date, end_date: date, data_dir: Optional[str] = None) -> str:
     """Standalone diagnostic for `--historical-backtest-hot-streak`: the
     one piece of this project's model that can be checked against real
     MLB history without lookahead risk - see mlb_props/
     historical_backtest.py's module docstring for exactly why the rest of
     the model (barrel%, xwOBA, etc.) can't be backtested this way yet.
     Requires `pip install pybaseball pandas` and real network access.
+
+    Also persists this run's real summary stats to
+    `<data_dir>/historical_backtest/runs.jsonl` when `data_dir` is given
+    (the workflow always passes it) - otherwise this real evidence only
+    ever existed as one run's console text, gone the moment that log
+    scrolled away. See historical_backtest.record_historical_backtest_run
+    and performance_report.py's historical-backtest section, which reads
+    this same file back.
     """
     import pybaseball as pyb
 
-    from mlb_props.historical_backtest import collect_hot_streak_observations, summarize_hot_streak_backtest
+    from mlb_props.historical_backtest import (
+        build_historical_backtest_run,
+        collect_hot_streak_observations,
+        record_historical_backtest_run,
+        summarize_hot_streak_backtest,
+    )
 
     game_dates = []
     d = start_date
@@ -377,7 +390,15 @@ def run_historical_hot_streak_backtest(start_date: date, end_date: date) -> str:
     session = build_retrying_session()
 
     observations = collect_hot_streak_observations(schedule, pyb, game_dates, season_start, session)
-    return summarize_hot_streak_backtest(observations)
+    text = summarize_hot_streak_backtest(observations)
+
+    if data_dir:
+        run = build_historical_backtest_run(observations, start_date, end_date)
+        n = record_historical_backtest_run(run, os.path.join(data_dir, "historical_backtest", "runs.jsonl"))
+        if n:
+            text += f"\n\nPersisted this run's real summary to {data_dir}/historical_backtest/runs.jsonl"
+
+    return text
 
 
 def run_name_lookup_check(names: List[str], year: int) -> str:
@@ -637,7 +658,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default="data",
         help="Root directory for this project's permanent real-pick/result/CLV history (see mlb_props/"
         "results.py and mlb_props/backtest.py): <data-dir>/picks/<date>.jsonl, <data-dir>/results/<date>.jsonl, "
-        "<data-dir>/clv/<date>.jsonl. Default: 'data'.",
+        "<data-dir>/clv/<date>.jsonl, <data-dir>/historical_backtest/runs.jsonl (see mlb_props/"
+        "historical_backtest.py). Default: 'data'.",
     )
     parser.add_argument(
         "--record-picks",
@@ -758,7 +780,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except ImportError:
             print("Configuration error: --historical-backtest-hot-streak requires `pip install pybaseball pandas`.", file=sys.stderr)
             return 2
-        text = run_historical_hot_streak_backtest(args.backtest_start_date, args.backtest_end_date)
+        text = run_historical_hot_streak_backtest(args.backtest_start_date, args.backtest_end_date, data_dir=args.data_dir)
         print(text)
         if args.out:
             with open(args.out, "w") as f:

@@ -9,8 +9,11 @@ from datetime import date, timedelta
 import pandas as pd
 
 from mlb_props.historical_backtest import (
+    build_historical_backtest_run,
     collect_hot_streak_observations,
     fetch_boxscore_batters,
+    load_historical_backtest_runs,
+    record_historical_backtest_run,
     summarize_hot_streak_backtest,
 )
 from mlb_props.schedule import ProbableMatchup
@@ -206,21 +209,22 @@ def test_summarize_hot_streak_backtest_is_honest_with_no_observations():
     assert "No real observations collected" in text
 
 
-def test_summarize_hot_streak_backtest_buckets_hot_and_cold_separately():
+def _obs(player, z, got_hr):
     from mlb_props.historical_backtest import HotStreakObservation
 
-    def obs(player, z, got_hr):
-        return HotStreakObservation(
-            game_date="2026-08-20", player=player, z_score=z,
-            l15_clear_hr_rate=None, l15_clear_tb2_rate=None, l15_clear_hit_rate=None,
-            season_clear_hr_rate=None, season_clear_tb2_rate=None, season_clear_hit_rate=None,
-            got_hr=got_hr, got_2plus_tb=False, got_hit=got_hr,
-        )
+    return HotStreakObservation(
+        game_date="2026-08-20", player=player, z_score=z,
+        l15_clear_hr_rate=None, l15_clear_tb2_rate=None, l15_clear_hit_rate=None,
+        season_clear_hr_rate=None, season_clear_tb2_rate=None, season_clear_hit_rate=None,
+        got_hr=got_hr, got_2plus_tb=False, got_hit=got_hr,
+    )
 
+
+def test_summarize_hot_streak_backtest_buckets_hot_and_cold_separately():
     observations = [
-        obs("Hot A", 1.5, True), obs("Hot B", 2.0, True),
-        obs("Cold A", -1.5, False), obs("Cold B", -2.0, False),
-        obs("Neutral A", 0.2, False),
+        _obs("Hot A", 1.5, True), _obs("Hot B", 2.0, True),
+        _obs("Cold A", -1.5, False), _obs("Cold B", -2.0, False),
+        _obs("Neutral A", 0.2, False),
     ]
 
     text = summarize_hot_streak_backtest(observations)
@@ -229,3 +233,60 @@ def test_summarize_hot_streak_backtest_buckets_hot_and_cold_separately():
     assert "Hot (z >= +1.0)" in text
     assert "Cold (z <= -1.0)" in text
     assert "n=2" in text  # both the hot and cold buckets have exactly 2 real observations each
+
+
+def test_build_historical_backtest_run_is_none_for_zero_observations():
+    assert build_historical_backtest_run([], date(2026, 8, 15), date(2026, 9, 3)) is None
+
+
+def test_build_historical_backtest_run_matches_the_real_bucket_math():
+    observations = [
+        _obs("Hot A", 1.5, True), _obs("Hot B", 2.0, True),
+        _obs("Cold A", -1.5, False), _obs("Cold B", -2.0, False),
+        _obs("Neutral A", 0.2, False),
+    ]
+    run = build_historical_backtest_run(observations, date(2026, 8, 15), date(2026, 9, 3))
+
+    assert run.start_date == "2026-08-15"
+    assert run.end_date == "2026-09-03"
+    assert run.n_observations == 5
+    assert run.overall_rates["hr"] == round(2 / 5, 4)
+    assert run.buckets["Hot (z >= +1.0)"]["n"] == 2
+    assert run.buckets["Hot (z >= +1.0)"]["hr"] == 1.0  # both hot observations got a real HR
+    assert run.buckets["Cold (z <= -1.0)"]["n"] == 2
+    assert run.buckets["Cold (z <= -1.0)"]["hr"] == 0.0
+    assert run.buckets["Neutral (-1.0 < z < +1.0)"]["n"] == 1
+
+
+def test_record_and_load_historical_backtest_run_roundtrips(tmp_path):
+    observations = [_obs("Hot A", 1.5, True)]
+    run = build_historical_backtest_run(observations, date(2026, 8, 15), date(2026, 9, 3))
+    out_path = str(tmp_path / "historical_backtest" / "runs.jsonl")
+
+    n = record_historical_backtest_run(run, out_path)
+    assert n == 1
+
+    loaded = load_historical_backtest_runs(out_path)
+    assert len(loaded) == 1
+    assert loaded[0].start_date == "2026-08-15"
+    assert loaded[0].n_observations == 1
+    assert loaded[0].buckets["Hot (z >= +1.0)"]["n"] == 1
+
+
+def test_record_historical_backtest_run_writes_nothing_for_a_none_run(tmp_path):
+    out_path = str(tmp_path / "historical_backtest" / "runs.jsonl")
+    n = record_historical_backtest_run(None, out_path)
+    assert n == 0
+    assert load_historical_backtest_runs(out_path) == []
+
+
+def test_record_historical_backtest_run_appends_across_multiple_runs(tmp_path):
+    out_path = str(tmp_path / "historical_backtest" / "runs.jsonl")
+    run1 = build_historical_backtest_run([_obs("A", 1.5, True)], date(2026, 8, 1), date(2026, 8, 10))
+    run2 = build_historical_backtest_run([_obs("B", -1.5, False)], date(2026, 8, 11), date(2026, 8, 20))
+    record_historical_backtest_run(run1, out_path)
+    record_historical_backtest_run(run2, out_path)
+
+    loaded = load_historical_backtest_runs(out_path)
+    assert len(loaded) == 2
+    assert [r.start_date for r in loaded] == ["2026-08-01", "2026-08-11"]
