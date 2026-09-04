@@ -275,6 +275,28 @@ def _candidate(player, market, event, ev_percent_model=6.0, has_market=True, bes
     )
 
 
+def test_prop_row_shows_the_real_caesars_brand_not_the_legacy_api_key():
+    # Confirmed live (2026-09-04): The Odds API's real key for Caesars
+    # Sportsbook is `williamhill_us` - a real, freely-returned book this
+    # project has priced against the whole time, just under an
+    # unrecognizable legacy platform name. See market.book_display_name.
+    from mlb_props.html_report import _prop_row
+
+    caesars = _candidate("Player A", "batter_home_runs", "Team A @ Team B", book="williamhill_us")
+    row_html = _prop_row(caesars, heat=None, kind="hr")
+    assert '<td class="book" data-k="book">Caesars</td>' in row_html
+    assert 'data-book="williamhill_us"' in row_html  # the raw API key, kept for filter matching
+
+
+def test_prop_table_filter_dropdown_shows_display_name_but_filters_by_raw_key():
+    from mlb_props.html_report import _prop_table
+
+    caesars = _candidate("Player A", "batter_home_runs", "Team A @ Team B", book="williamhill_us")
+    html_text = _prop_table("Best home run props", "hint", [caesars], "Model P(HR)", 10, {}, "hr", "hr")
+    assert '<option value="williamhill_us">Caesars</option>' in html_text
+    assert 'data-book="williamhill_us"' in html_text  # filter still matches the real API key
+
+
 def test_prop_row_flags_a_thin_one_book_market_in_the_full_table_too():
     from mlb_props.html_report import _prop_row
 
@@ -547,7 +569,7 @@ def test_reco_row_carries_a_take_bet_button_with_a_stable_key():
     assert 'data-key="2026-08-20|batter_home_runs|player a|team a @ team b"' in row_html
     assert 'data-units="1.5"' in row_html
     assert 'data-price="200"' in row_html
-    assert 'data-book="draftkings"' in row_html
+    assert 'data-book="DraftKings"' in row_html  # real display name (market.book_display_name), not the raw API key
     # Same pick rendered for a different game_date (this project's report
     # is regenerated fresh per real day) must get a different key - never
     # collide with a different day's identical pick.

@@ -37,6 +37,59 @@ HITS_LINE_FOR_1PLUS = 0.5  # the standard "gets a hit" line, as opposed to a lon
 # live lines). This project never scores or recommends the other side.
 RECOMMENDED_SIDE_FOR_MARKET = {MARKET_HOME_RUN: "yes", MARKET_TOTAL_BASES: "over", MARKET_HITS: "over"}
 
+# The Odds API's real per-book `key` field (what PropLine.sportsbook actually
+# holds - see theoddsapi.py's _parse_outcome) doesn't always match the real
+# sportsbook's own current brand name. Confirmed live against The Odds API's
+# own bookmaker-apis docs page (2026-09-04): `williamhill_us` is Caesars
+# Sportsbook - Caesars still runs on the old William Hill US platform after
+# its 2021 acquisition, and the API key was never renamed for the rebrand.
+# This is a real, live, freely-returned book in every fetch this project has
+# ever made (confirmed across many real runs, going back to this project's
+# earliest live data) - it's simply been showing up under its old platform's
+# name this whole time, which reads as an unrecognizable book to anyone
+# checking this site against a real sportsbook app, and silently defeated
+# any attempt to filter/label picks by "caesars" (the name this project's
+# own mock data and everyone's mental model actually use).
+#
+# Every entry here is a real book key this project has actually seen in a
+# live fetch - not a guessed/speculative list - with its real current brand
+# name; several (DraftKings, FanDuel, BetMGM, ESPN BET) have capitalization
+# a blind .title() would get wrong.
+BOOK_DISPLAY_NAMES = {
+    "williamhill_us": "Caesars",
+    "draftkings": "DraftKings",
+    "fanduel": "FanDuel",
+    "betmgm": "BetMGM",
+    "betrivers": "BetRivers",
+    "espnbet": "ESPN BET",
+    "hardrockbet": "Hard Rock Bet",
+    "betonlineag": "BetOnline.ag",
+    "betparx": "betPARX",
+    "ballybet": "Bally Bet",
+    "rebet": "ReBet",
+    "mybookieag": "MyBookie.ag",
+    "fanatics": "Fanatics",
+    "fliff": "Fliff",
+    "bovada": "Bovada",
+}
+
+
+def book_display_name(book_key: Optional[str]) -> str:
+    """The real, human-recognizable sportsbook name for a book key that may
+    be a rebranded/legacy API key, or have brand capitalization a blind
+    title-case would get wrong (see BOOK_DISPLAY_NAMES for every book this
+    project has actually seen live). Falls back to title-casing (with
+    underscores as spaces) for a real book this project hasn't seen yet,
+    rather than showing a raw snake_case API key - still better than
+    nothing, just not guaranteed to match that book's real branding.
+    `None`/empty stays empty rather than guessing.
+    """
+    if not book_key:
+        return book_key or ""
+    key = book_key.strip().lower()
+    return BOOK_DISPLAY_NAMES.get(key, book_key.replace("_", " ").title())
+
+
 _BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "espnbet", "fanatics"]
 
 

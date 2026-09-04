@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from .edges import EdgeCandidate
 from .hot_streak import HeatIndex
+from .market import book_display_name
 from .pipeline import MatchupEnvironment, SlateReport
 
 
@@ -153,7 +154,7 @@ def _render_edge_table(title: str, edges: List[EdgeCandidate], top: int, heat_by
         l15, szn = clearance_cols(heat_by_player.get(e.player), kind)
         lines.append(
             f"{_truncate(e.player, 20):<20} {_truncate(e.event, 16):<16} {_fmt_pct(e.model_prob):>7} {bp_model:>7} "
-            f"{e.best_line.odds:>+7d} {e.best_line.sportsbook:<10} "
+            f"{e.best_line.odds:>+7d} {_truncate(book_display_name(e.best_line.sportsbook), 13):<13} "
             f"{_fmt_opt_pct(e.market_fair_prob):>8} {_fmt_opt_signed_pct(e.edge_vs_market):>7} "
             f"{e.ev_percent_model:>+7.1f}% {ev_market:>8} {e.books_quoting:>4} {l15:>7} {szn:>6} {weather:<22}"
         )
