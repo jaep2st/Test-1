@@ -343,7 +343,16 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           BETSTAMP_API_KEY: ${{ secrets.BETSTAMP_API_KEY }}
         run: |
-          python mlb_props_main.py --record-clv --date "${{ inputs.date || 'today' }}" --data-dir data
+          # --log-level DEBUG, same as the main report step above - real
+          # recorded CLV data (2026-09-04) showed a suspiciously long
+          # "closing" price (a single book, williamhill_us, +4000 to +8000
+          # on batter_home_runs) even after results.py's same-line fix
+          # (see that module's _EXPECTED_LINE_FOR_MARKET docstring). This
+          # step's fetch never had DEBUG logging before, so there was no
+          # way to see the real point/price data behind that number - this
+          # gives the next run's logs the same per-player point->price
+          # dump theoddsapi.py already produces for the main step.
+          python mlb_props_main.py --record-clv --date "${{ inputs.date || 'today' }}" --data-dir data --log-level DEBUG
 
       - name: Regenerate the Performance dashboard from this run's finalized data
         run: |
