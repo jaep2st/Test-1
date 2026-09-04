@@ -37,8 +37,20 @@ from odds_monitor.models import PropLine
 from .edges import EdgeCandidate
 from .hot_streak import game_outcomes_from_events
 from ._ids import lookup_mlbam_id
-from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
+from .market import HITS_LINE_FOR_1PLUS, HOME_RUN_LINE_FOR_1PLUS, MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES, TOTAL_BASES_LINE_FOR_2PLUS
 from .market import RECOMMENDED_SIDE_FOR_MARKET as _SIDE_FOR_MARKET
+
+# The one standard line this whole pipeline ever scores/records per market
+# (see edges.py's module docstring and market.py) - every PickRecord this
+# project has ever written is implicitly at this line, even though
+# PickRecord itself never stored the line value directly. record_closing_odds
+# needs it below for the same reason edges.py's _single_sided_lookup and
+# _fair_price_lookup already restrict to it.
+_EXPECTED_LINE_FOR_MARKET = {
+    MARKET_HOME_RUN: HOME_RUN_LINE_FOR_1PLUS,
+    MARKET_TOTAL_BASES: TOTAL_BASES_LINE_FOR_2PLUS,
+    MARKET_HITS: HITS_LINE_FOR_1PLUS,
+}
 from .pipeline import SlateReport
 
 logger = logging.getLogger(__name__)
@@ -303,12 +315,23 @@ def record_closing_odds(
 ) -> int:
     """For every distinct (player, market, event) with a real recorded
     price in `picks_path`, finds the best currently-quoted price for that
-    same recommended side among `odds_lines` (a fresh odds fetch the
-    caller already made - see `mlb_props_main.py`) and records the
-    closing-line-value comparison. A pick with no matching closing line
-    (the market disappeared, the game already started, etc.) is skipped
-    entirely, never recorded with a guessed value. Returns the count
-    written.
+    same recommended side AND the same standard line among `odds_lines`
+    (a fresh odds fetch the caller already made - see `mlb_props_main.py`)
+    and records the closing-line-value comparison. A pick with no matching
+    closing line (the market disappeared, the game already started, etc.)
+    is skipped entirely, never recorded with a guessed value. Returns the
+    count written.
+
+    Restricted to `_EXPECTED_LINE_FOR_MARKET`'s standard line per market -
+    confirmed live (real recorded CLV data, 2026-09-04) that without this,
+    a real book quoting several point tiers under the same market/side
+    (e.g. "1+ HR", "2+ HR", "3+ HR" all as the "yes" outcome) got its
+    longest-shot tier's price (seen: +8000) picked as the "closing" price
+    for a pick that was actually the standard "1+ HR" line the whole time -
+    producing a nonsense CLV like -93% against a real, honest +450 pick
+    price. Exactly the same bug edges.py's `_single_sided_lookup` and
+    `_fair_price_lookup` were already fixed against (see that module's
+    docstring); this function just never got the same fix.
     """
     recorded_at = recorded_at or datetime.now(timezone.utc)
     picks = [p for p in load_picks(picks_path) if p.best_price is not None and p.best_book is not None]
@@ -320,6 +343,9 @@ def record_closing_odds(
             continue
         side = _SIDE_FOR_MARKET.get(line.market)
         if side is None or line.side.lower() != side:
+            continue
+        expected_line = _EXPECTED_LINE_FOR_MARKET.get(line.market)
+        if expected_line is None or abs(line.line - expected_line) > 1e-6:
             continue
         k = (line.player.strip().lower(), line.market.lower(), line.event.lower())
         cur = best_current.get(k)

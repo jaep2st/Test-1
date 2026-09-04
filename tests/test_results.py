@@ -184,6 +184,33 @@ def test_record_closing_odds_skips_picks_with_no_matching_closing_line(tmp_path)
     assert n == 0
 
 
+def test_record_closing_odds_ignores_a_longer_shot_tier_at_the_same_side(tmp_path):
+    # Real recorded CLV data (2026-09-04) showed batter_home_runs CLV
+    # averaging -53.85% with "closing" prices like +8000 - a real book
+    # quoting several point tiers under the same market/side ("1+ HR",
+    # "2+ HR", "3+ HR", all outcome name "yes") got its longest-shot tier
+    # picked as the "closing" price for what was actually always the
+    # standard "1+ HR" (0.5) pick, since nothing here filtered by line.
+    # Exactly the bug edges.py's _single_sided_lookup already guards
+    # against - this is the same fix for record_closing_odds.
+    picks_path = tmp_path / "picks" / "2026-08-20.jsonl"
+    record_picks(_report(), str(picks_path), recorded_at=datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc))
+
+    closing_lines = [
+        # The real standard line this pick was actually recorded at.
+        PropLine(player="Player One", team=None, league="mlb", market="batter_home_runs", side="yes", line=0.5, odds=550, sportsbook="draftkings", event="Team A @ Team B"),
+        # A much longer-shot tier, same side, same book - must NOT be picked
+        # even though its price is far better (higher decimal odds).
+        PropLine(player="Player One", team=None, league="mlb", market="batter_home_runs", side="yes", line=2.5, odds=8000, sportsbook="draftkings", event="Team A @ Team B"),
+    ]
+    out = tmp_path / "clv" / "2026-08-20.jsonl"
+    n = record_closing_odds(str(picks_path), closing_lines, str(out), recorded_at=datetime(2026, 8, 20, 22, 0, tzinfo=timezone.utc))
+    assert n == 1
+    records = load_clv(str(out))
+    assert records[0].player == "Player One"
+    assert records[0].closing_price == 550  # the real 1+ HR line, not the 2.5 longshot tier
+
+
 def test_record_closing_odds_keeps_only_the_latest_same_day_snapshot(tmp_path):
     picks_path = tmp_path / "picks" / "2026-08-20.jsonl"
     early = _edge("Player One", "batter_home_runs", price=700)
