@@ -23,6 +23,7 @@ from typing import Dict, List, Optional
 
 from .edges import EdgeCandidate
 from .hot_streak import HeatIndex
+from .market import book_display_name
 from .pipeline import MatchupEnvironment, SlateReport
 from .report import clearance_cols, heat_lookup
 
@@ -66,7 +67,7 @@ def _prop_table_rows(edges: List[EdgeCandidate], heat_by_player: Dict[str, HeatI
         l15, szn = clearance_cols(heat_by_player.get(e.player), kind)
         priced_rows.append([
             cell(e.player), cell(e.event), _fmt_pct(e.model_prob), _fmt_pct(e.bp_model_prob),
-            f"{e.best_line.odds:+d}", e.best_line.sportsbook, _fmt_pct(e.market_fair_prob),
+            f"{e.best_line.odds:+d}", book_display_name(e.best_line.sportsbook), _fmt_pct(e.market_fair_prob),
             _fmt_signed_pct(e.edge_vs_market), f"{e.ev_percent_model:+.1f}%",
             f"{e.ev_percent_market:+.1f}%" if e.ev_percent_market is not None else "n/a",
             str(e.books_quoting), l15, szn, cell(_weather_str(e)),

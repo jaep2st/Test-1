@@ -88,6 +88,21 @@ def test_renders_real_numbers_from_populated_data(tmp_path):
     assert "14:00 ET" in html
 
 
+def test_pick_log_shows_the_real_caesars_brand_not_the_legacy_api_key(tmp_path):
+    # Confirmed live (2026-09-04): The Odds API's real key for Caesars
+    # Sportsbook is `williamhill_us` - see market.book_display_name. The
+    # pick log only shows resolved picks (joined against a real outcome).
+    os.makedirs(tmp_path / "picks")
+    os.makedirs(tmp_path / "results")
+    _append_jsonl([_pick("Player A", best_book="williamhill_us")], str(tmp_path / "picks" / "2026-08-20.jsonl"))
+    _append_jsonl(
+        [GameOutcome(game_date="2026-08-20", player="Player A", got_hr=True, got_2plus_tb=True, got_hit=True)],
+        str(tmp_path / "results" / "2026-08-20.jsonl"),
+    )
+    html = render_performance_report(str(tmp_path))
+    assert '<td class="book" data-k="book">Caesars</td>' in html
+
+
 def test_renders_the_weight_refit_comparison_when_components_exist():
     import tempfile
 

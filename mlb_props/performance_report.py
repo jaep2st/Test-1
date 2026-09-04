@@ -30,6 +30,7 @@ from .backtest import (
     recorded_at_et,
     resolve_picks,
 )
+from .market import book_display_name
 from .refit import MIN_PICKS_TO_FIT, BlendResult, RefitResult, fit_all_market_blends, refit_all_markets
 from .site_style import STYLE, nav_html
 
@@ -420,7 +421,7 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
             f'<td data-k="tier">{_esc(_TIER_LABELS.get(p.tier, p.tier))}</td>'
             f'<td class="num" data-k="prob">{_fmt_pct(p.model_prob)}</td>'
             f'<td class="num" data-k="price">{price_cell}</td>'
-            f'<td class="book" data-k="book">{_esc(p.best_book or "n/a")}</td>'
+            f'<td class="book" data-k="book">{_esc(book_display_name(p.best_book) or "n/a")}</td>'
             f'<td data-k="outcome">{outcome_cell}</td>'
             "</tr>"
         )

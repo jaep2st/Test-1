@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from .betting import MIN_EV_PERCENT_TO_RECOMMEND, RecommendedBet, build_recommended_bets
 from .edges import MIN_BOOKS_FOR_MARKET_AGREE, EdgeCandidate
 from .hot_streak import HeatIndex
-from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
+from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES, book_display_name
 from .pipeline import MatchupEnvironment, SlateReport
 from .report import clearance_cols, clearance_rates, heat_lookup
 from .scoring import HITS_WEIGHTS, HR_WEIGHTS, TB_WEIGHTS
@@ -89,7 +89,7 @@ def _game_roster_html(candidates: List[EdgeCandidate]) -> str:
     rows = []
     for c in ordered:
         label, css_class = _verdict(c.has_market_data, c.tier, c.ev_percent_model)
-        price_text = f"{c.best_line.odds:+d} {c.best_line.sportsbook}" if c.best_line else "no price yet"
+        price_text = f"{c.best_line.odds:+d} {book_display_name(c.best_line.sportsbook)}" if c.best_line else "no price yet"
         rows.append(
             f'<div class="game-roster-row"><span class="verdict {css_class}">{_esc(label)}</span>'
             f'<span class="grp"><b>{_esc(c.player)}</b><span class="grm">{_esc(_MARKET_SHORT_LABELS.get(c.market, c.market))}</span></span>'
@@ -280,7 +280,7 @@ def _other_props_html(player: str, market: str, event: str, all_props_by_player:
     rows = []
     for c in ordered:
         label, css_class = _verdict(c.has_market_data, c.tier, c.ev_percent_model)
-        price_text = f"{c.best_line.odds:+d} {c.best_line.sportsbook}" if c.best_line else "no price yet"
+        price_text = f"{c.best_line.odds:+d} {book_display_name(c.best_line.sportsbook)}" if c.best_line else "no price yet"
         rows.append(
             f'<div class="game-roster-row"><span class="verdict {css_class}">{_esc(label)}</span>'
             f'<span class="grp"><b>{_esc(_MARKET_SHORT_LABELS.get(c.market, c.market))}</b><span class="grm">{_esc(c.event)}</span></span>'
@@ -403,7 +403,7 @@ def _prop_row(
             <td class="num" data-k="prob">{_fmt_pct(e.model_prob)}</td>
             {bp_cell}
             <td class="num pos" data-k="price">{e.best_line.odds:+d}</td>
-            <td class="book" data-k="book">{_esc(e.best_line.sportsbook)}</td>
+            <td class="book" data-k="book">{_esc(book_display_name(e.best_line.sportsbook))}</td>
             <td class="num secondary-col" data-k="fair">{_fmt_opt_pct(e.market_fair_prob)}</td>
             <td class="num secondary-col" data-k="edge">{edge_chip}</td>
             <td class="num" data-k="ev">{ev_chip}</td>
@@ -462,7 +462,7 @@ def _take_bet_button(r: RecommendedBet, game_date_iso: str) -> str:
         f'<button type="button" class="take-btn" data-key="{_esc(key)}" '
         f'data-player="{_esc(r.player)}" data-market-label="{_esc(r.market_label)}" '
         f'data-event="{_esc(r.event)}" data-game-date="{_esc(game_date_iso)}" '
-        f'data-price="{r.best_price}" data-book="{_esc(r.best_book)}" '
+        f'data-price="{r.best_price}" data-book="{_esc(book_display_name(r.best_book))}" '
         f'data-units="{r.units:g}">Log this bet</button>'
     )
 
@@ -475,7 +475,7 @@ def _reco_row(r: RecommendedBet, game_date_iso: str, all_props_by_player: Option
       <div class="reco-row">
         <div><span class="verdict {css_class}" style="margin-right:8px;">{_esc(label)}</span><div class="who">{_esc(r.player)}</div><div class="bet">{_esc(r.market_label)}</div>{_lineup_source_note(r.lineup_source)}{_component_detail_html(r.market, r.components, r.player, r.event, all_props_by_player)}</div>
         <div class="event">{_esc(r.event)}</div>
-        <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(r.best_book)}{_breakeven_cell(r.breakeven)}{_books_quoting_note(r.books_quoting)}</div>
+        <div class="price num"><b class="pos">{r.best_price:+d}</b> {_esc(book_display_name(r.best_book))}{_breakeven_cell(r.breakeven)}{_books_quoting_note(r.books_quoting)}</div>
         <div class="prob num">{_fmt_pct(r.model_prob)} model<div class="mkt-fair">{_fmt_opt_pct(r.market_fair_prob)} market fair</div></div>
         <div class="edge num">{edge_chip}</div>
         <div class="reco-units"><div class="n">{r.units:g}u</div><div class="lbl">size</div>{_take_bet_button(r, game_date_iso)}</div>
@@ -635,7 +635,7 @@ def _prop_table(
     # a fixed list (a book with zero real prices tonight shouldn't appear as
     # a selectable, always-empty filter option).
     books = sorted({e.best_line.sportsbook for e in shown if e.has_market_data})
-    book_options = "".join(f'<option value="{_esc(b.lower())}">{_esc(b)}</option>' for b in books)
+    book_options = "".join(f'<option value="{_esc(b.lower())}">{_esc(book_display_name(b))}</option>' for b in books)
     return f"""
     <div class="section-head"><h2>{_esc(title)}</h2><span class="hint">{_esc(hint)}</span></div>
     <div class="filter-bar">
@@ -730,7 +730,7 @@ def render_html_report(
         if not top.has_market_data:
             return f"model {_fmt_pct(top.model_prob)} &middot; no market price"
         vs_market = f" vs market <b>{_fmt_pct(top.market_fair_prob)}</b>" if top.market_fair_prob is not None else " (single-sided market, no no-vig consensus)"
-        return f"model <b>{_fmt_pct(top.model_prob)}</b>{vs_market} &middot; <span class=\"num pos\">{top.best_line.odds:+d}</span> {_esc(top.best_line.sportsbook)}"
+        return f"model <b>{_fmt_pct(top.model_prob)}</b>{vs_market} &middot; <span class=\"num pos\">{top.best_line.odds:+d}</span> {_esc(book_display_name(top.best_line.sportsbook))}"
 
     tiles = []
     if top_hr:
