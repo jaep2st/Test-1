@@ -52,7 +52,7 @@ on:
         required: false
         default: "0"
       books:
-        description: "Restrict odds to these sportsbook IDs, space-separated. Leave blank for the default (fanduel draftkings betmgm betrivers espnbet - 'espnbet' is theScore Bet's real Odds API key). Type 'all' for every book Odds API returns."
+        description: "Restrict odds to these sportsbook IDs, space-separated. Leave blank for the default (fanduel draftkings betmgm betrivers espnbet williamhill_us fliff betparx - 'espnbet' is theScore Bet's real Odds API key, 'williamhill_us' is Caesars). Type 'all' for every book Odds API returns."
         required: false
         default: ""
       live_odds_scan:
@@ -202,9 +202,34 @@ jobs:
           # Odds API keys, confirmed live against the-odds-api.com's own
           # bookmaker list: 'espnbet' is theScore Bet's key (kept through
           # the ESPN Bet rebrand - the docs list it as "theScore Bet",
-          # "Formerly ESPN Bet"). A manual run can still type 'all' in the
-          # books field to see every book Odds API returns, unrestricted.
-          DEFAULT_BOOKS="fanduel draftkings betmgm betrivers espnbet"
+          # "Formerly ESPN Bet"); 'williamhill_us' is Caesars (see
+          # mlb_props/market.py's BOOK_DISPLAY_NAMES). A manual run can
+          # still type 'all' in the books field to see every book Odds
+          # API returns, unrestricted.
+          #
+          # williamhill_us/fliff/betparx added 2026-09-05 after a real,
+          # `--books all` diagnostic run's DEBUG logs showed the original
+          # 5-book default was silently starving the HR ("agree" tier)
+          # market: draftkings/betmgm/fanduel don't carry the
+          # `batter_home_runs` market key in this account's live fetch at
+          # all (confirmed: 0 outcomes across every event, every run),
+          # leaving only betrivers+espnbet from the original list - and
+          # betrivers only ever quotes the "Yes" side (0/246 players had
+          # both Yes+No from betrivers across a real 15-game slate), so
+          # `find_fair_prices` (needs one book with BOTH sides) had only
+          # espnbet to work with. That makes `books_quoting >= 2`
+          # (MIN_BOOKS_FOR_MARKET_AGREE, see edges.py) for HR structurally
+          # near-impossible no matter how good the model is - not a small-
+          # sample issue, a book-list issue. Same real diagnostic run
+          # confirmed fliff and betparx are the other two books that
+          # genuinely quote HR two-sided (278/278 and 239/246 players
+          # respectively) - adding them gives `find_fair_prices` a real
+          # shot at 2+ agreeing books for HR. williamhill_us (Caesars) is
+          # single-sided-only for HR like betrivers, but it's a major real
+          # book (the one that showed the +1500 price this fix was
+          # originally prompted by) worth having in the single-sided
+          # price-shopping fallback and the picks record either way.
+          DEFAULT_BOOKS="fanduel draftkings betmgm betrivers espnbet williamhill_us fliff betparx"
           if [ -z "$BOOKS_INPUT" ]; then
             BOOKS_INPUT="$DEFAULT_BOOKS"
           fi
