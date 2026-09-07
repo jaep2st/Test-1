@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from .results import ClvRecord, GameOutcome, PickRecord, latest_pick_per_key, load_clv, load_picks, load_results
+from .results import ClvRecord, GameOutcome, PickRecord, load_clv, load_picks, load_results
 
 # Same US-Eastern convention this project already anchors "today" to (see
 # mlb_props_main.py's _MLB_TZ) - MLB is a US league, so "what time did this
@@ -71,16 +71,52 @@ class ResolvedPick:
     won: bool
 
 
+def _latest_pick_per_game(picks: List[PickRecord]) -> Dict[Tuple[str, str, str, str], PickRecord]:
+    """Same idea as `results.latest_pick_per_key`, but keyed by
+    `(player, market, event, game_date)` instead of just `PickRecord.key`'s
+    `(player, market, event)`.
+
+    That 3-tuple key is right for its actual job (collapsing repeated
+    same-day snapshots of the same pick, within one day's picks file - see
+    `record_closing_odds`, which always loads exactly one day's file). It's
+    wrong here: `resolve_picks` joins picks across *every* recorded day at
+    once, and MLB teams routinely play the same opponent on consecutive
+    days (a series) - `event` is just "Team A @ Team B" with no date in it,
+    so a player's pick from day 1 of a series and day 3 of the same series
+    share the exact same 3-tuple key. Deduping across all days with that
+    key silently collapses the whole series down to its last recorded day,
+    discarding every earlier day's real result.
+
+    Confirmed against this project's own real recorded history
+    (2026-09-07): 540 of 801 real `(player, market, event)` keys spanned
+    2+ real game_dates, and 89% of all recorded pick snapshots belonged to
+    one of those collisions - `resolve_picks` was silently dropping most
+    of a series' earlier days from every stat on the Performance page
+    (hit rate by market/tier/lineup source, calibration, and the weight-
+    refit/market-blend training data in refit.py, which all consume this
+    function's output). Adding `game_date` to the key fixes it without
+    touching `PickRecord.key`/`latest_pick_per_key`, which are still
+    correct for their own single-day callers.
+    """
+    latest: Dict[Tuple[str, str, str, str], PickRecord] = {}
+    for p in picks:
+        key = p.key + (p.game_date,)
+        prev = latest.get(key)
+        if prev is None or p.recorded_at > prev.recorded_at:
+            latest[key] = p
+    return latest
+
+
 def resolve_picks(picks: List[PickRecord], results: List[GameOutcome]) -> List[ResolvedPick]:
-    """Joins the latest snapshot of every recorded pick against its real
-    resolved outcome. Picks with no resolved outcome yet (the game hasn't
-    been resolved) or an unrecognized market are silently excluded - every
-    stat downstream only ever counts picks we actually know the real answer
-    for, never an assumed loss.
+    """Joins the latest same-day snapshot of every recorded pick against its
+    real resolved outcome. Picks with no resolved outcome yet (the game
+    hasn't been resolved) or an unrecognized market are silently excluded -
+    every stat downstream only ever counts picks we actually know the real
+    answer for, never an assumed loss.
     """
     outcomes = latest_results_by_key(results)
     resolved = []
-    for pick in latest_pick_per_key(picks).values():
+    for pick in _latest_pick_per_game(picks).values():
         outcome = outcomes.get((pick.player.strip().lower(), pick.game_date))
         if outcome is None:
             continue

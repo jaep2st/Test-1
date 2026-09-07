@@ -78,6 +78,34 @@ def test_resolve_picks_keeps_only_the_latest_same_day_pick_snapshot():
     assert resolved[0].pick.model_prob == 0.30
 
 
+def test_resolve_picks_keeps_each_days_pick_in_a_real_multi_day_series():
+    # Same two teams (event string never carries a date - see PickRecord.key)
+    # on three consecutive days, same player/market each day - a completely
+    # normal MLB series. Confirmed live (2026-09-07) that deduping picks
+    # across every recorded day with PickRecord.key alone (player, market,
+    # event - no game_date) collapsed a real series down to only its last
+    # day, discarding 89% of all recorded pick snapshots from every
+    # Performance-page stat. Each day's own pick and own real outcome must
+    # both survive independently.
+    picks = [
+        _pick("Player A", model_prob=0.10, recorded_at="2026-08-20T18:00:00+00:00", game_date="2026-08-20"),
+        _pick("Player A", model_prob=0.20, recorded_at="2026-08-21T18:00:00+00:00", game_date="2026-08-21"),
+        _pick("Player A", model_prob=0.30, recorded_at="2026-08-22T18:00:00+00:00", game_date="2026-08-22"),
+    ]
+    results = [
+        _outcome("Player A", got_hr=True, game_date="2026-08-20"),
+        _outcome("Player A", got_hr=False, game_date="2026-08-21"),
+        _outcome("Player A", got_hr=True, game_date="2026-08-22"),
+    ]
+    resolved = resolve_picks(picks, results)
+    assert len(resolved) == 3
+    by_date = {r.pick.game_date: r for r in resolved}
+    assert by_date["2026-08-20"].won is True
+    assert by_date["2026-08-20"].pick.model_prob == 0.10
+    assert by_date["2026-08-21"].won is False
+    assert by_date["2026-08-22"].won is True
+
+
 def test_latest_results_by_key_takes_the_last_appended_resolution():
     results = [_outcome("Player A", got_hr=False), _outcome("Player A", got_hr=True)]
     by_key = latest_results_by_key(results)
