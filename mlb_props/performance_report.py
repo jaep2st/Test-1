@@ -18,7 +18,9 @@ from typing import List, Optional
 
 from .backtest import (
     CalibrationBucket,
+    DailyUnits,
     HitRateGroup,
+    UnitsSummary,
     calibration_buckets,
     clv_summary,
     hit_rate_by_lineup_source,
@@ -30,6 +32,9 @@ from .backtest import (
     load_all_results,
     recorded_at_et,
     resolve_picks,
+    units_by_date,
+    units_ledger,
+    units_summary,
 )
 from .historical_backtest import HistoricalBacktestRun, load_historical_backtest_runs
 from .market import book_display_name
@@ -72,8 +77,80 @@ _LINEUP_SOURCE_LABELS = {
 }
 
 
-def _tile(label: str, value: str, sub: str) -> str:
-    return f'<div class="tile"><div class="label">{_esc(label)}</div><div class="value">{_esc(value)}</div><div class="sub">{sub}</div></div>'
+def _tile(label: str, value: str, sub: str, value_class: str = "") -> str:
+    cls = f" {value_class}" if value_class else ""
+    return f'<div class="tile"><div class="label">{_esc(label)}</div><div class="value{cls}">{_esc(value)}</div><div class="sub">{sub}</div></div>'
+
+
+def _fmt_units(x: float) -> str:
+    # Explicit sign always shown (Python's `+` format spec) - "up or down"
+    # is the entire point of this number, so a bare "3.2u" reading as
+    # ambiguous defeats it. "u" suffix matches betting.py's own "1 unit =
+    # 1% of bankroll" convention (see that module's docstring).
+    return f"{x:+.1f}u"
+
+
+def _units_section(summary: UnitsSummary, daily: List[DailyUnits]) -> str:
+    """Real "up or down" units record - see backtest.units_ledger's
+    docstring for exactly which resolved picks count (only ones that would
+    have actually cleared betting.py's own real recommendation bar, sized
+    with the exact same Kelly math the live Recommended Bets section
+    uses). This is the plain-language answer to "is this thing actually
+    making money," one level more concrete than a hit-rate percentage or a
+    CLV number - both real and useful, but neither says how many units
+    that translates to.
+    """
+    if summary.n_bets == 0:
+        return """
+  <section class="section">
+    <div class="section-head">
+      <h2>Units record</h2>
+      <span class="hint">Real profit/loss in units (1 unit = 1% of bankroll) on every pick that would have cleared the real bet bar</span>
+    </div>
+    <div class="empty">No resolved picks have cleared the real recommendation bar yet (see betting.MIN_EV_PERCENT_TO_RECOMMEND) - this fills in as real picks resolve.</div>
+  </section>"""
+
+    breakdown_rows = "".join(
+        f"<tr><td>{label}</td><td class=\"num\">{n}</td><td class=\"num {'pos' if net >= 0 else 'neg'}\">{_fmt_units(net)}</td></tr>"
+        for label, n, net in (
+            ("Strong (model + market agree)", summary.strong_n_bets, summary.strong_net_units),
+            ("Speculative (model only)", summary.speculative_n_bets, summary.speculative_net_units),
+        )
+    )
+    daily_rows = "".join(
+        f'<tr><td class="num">{_esc(d.game_date)}</td>'
+        f'<td class="num {"pos" if d.net_units >= 0 else "neg"}">{_fmt_units(d.net_units)}</td>'
+        f'<td class="num {"pos" if d.cumulative_units >= 0 else "neg"}">{_fmt_units(d.cumulative_units)}</td></tr>'
+        for d in reversed(daily)
+    )
+    roi_text = f"{summary.roi_percent:+.1f}%" if summary.roi_percent is not None else "n/a"
+    return f"""
+  <section class="section">
+    <div class="section-head">
+      <h2>Units record</h2>
+      <span class="hint">Real profit/loss in units (1 unit = 1% of bankroll) on every pick that would have cleared the real bet bar</span>
+    </div>
+    <div class="method-grid">
+      <div class="method-card">
+        <h3>By confidence tier</h3>
+        <table class="props" style="min-width:0;">
+          <thead><tr><th>Tier</th><th>Bets</th><th>Net units</th></tr></thead>
+          <tbody>{breakdown_rows}
+            <tr><td><b>Total</b></td><td class="num"><b>{summary.n_bets}</b></td>
+            <td class="num {'pos' if summary.net_units >= 0 else 'neg'}"><b>{_fmt_units(summary.net_units)}</b></td></tr>
+          </tbody>
+        </table>
+        <div class="sub" style="margin-top:8px;">{summary.total_units_staked:.1f}u total staked &middot; {roi_text} ROI</div>
+      </div>
+      <div class="method-card">
+        <h3>By real game date</h3>
+        <table class="props" style="min-width:0;">
+          <thead><tr><th>Date</th><th>Net units</th><th>Cumulative</th></tr></thead>
+          <tbody>{daily_rows}</tbody>
+        </table>
+      </div>
+    </div>
+  </section>"""
 
 
 def _calibration_svg(buckets: List[CalibrationBucket]) -> str:
@@ -420,6 +497,9 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     results = load_all_results(data_dir)
     clv_records = load_all_clv(data_dir)
     resolved = resolve_picks(picks, results)
+    units_ledger_rows = units_ledger(resolved)
+    units = units_summary(units_ledger_rows)
+    daily_units = units_by_date(units_ledger_rows)
 
     buckets = calibration_buckets(resolved)
     clv = clv_summary(clv_records)
@@ -443,10 +523,22 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     )
 
     tiles = [
-        # CLV leads: unlike win rate, closing-line value is the standard way
-        # sharp bettors (and sportsbooks themselves) measure real skill,
-        # since the closing line is the most efficient price a market ever
-        # prints - see the "Methodology & data sources" section below.
+        # Units record leads even CLV: it's the one number here that
+        # doesn't need any explanation - "up 4.8 units" reads as real
+        # money in a way a CLV percentage or hit rate doesn't. See
+        # backtest.units_ledger's docstring for exactly what counts.
+        _tile(
+            "Units record",
+            _fmt_units(units.net_units) if units.n_bets else "n/a",
+            f"across <b>{units.n_bets}</b> real recommended bet{'s' if units.n_bets != 1 else ''} "
+            "(1 unit = 1% of bankroll) &mdash; see the Units record section below",
+            value_class=("pos" if units.net_units >= 0 else "neg") if units.n_bets else "",
+        ),
+        # CLV leads the rest: unlike win rate, closing-line value is the
+        # standard way sharp bettors (and sportsbooks themselves) measure
+        # real skill, since the closing line is the most efficient price a
+        # market ever prints - see the "Methodology & data sources"
+        # section below.
         _tile(
             "Mean CLV",
             _fmt_signed_pct(clv.mean_clv_percent) if clv.n else "n/a",
@@ -548,6 +640,8 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     <span class="eyebrow">At a glance</span>
     <div class="tiles">{''.join(tiles)}</div>
   </section>
+
+  {_units_section(units, daily_units)}
 
   <section class="section">
     <div class="section-head">

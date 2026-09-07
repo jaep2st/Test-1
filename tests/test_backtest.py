@@ -14,6 +14,9 @@ from mlb_props.backtest import (
     latest_results_by_key,
     recorded_at_et,
     resolve_picks,
+    units_by_date,
+    units_ledger,
+    units_summary,
 )
 from mlb_props.results import ClvRecord, GameOutcome, PickRecord
 
@@ -26,6 +29,9 @@ def _pick(
     recorded_at="2026-08-20T18:00:00+00:00",
     game_date="2026-08-20",
     lineup_source="active_roster",
+    best_price=650,
+    ev_percent_model=25.0,
+    books_quoting=4,
 ):
     return PickRecord(
         game_date=game_date,
@@ -38,12 +44,12 @@ def _pick(
         model_prob=model_prob,
         bp_model_prob=None,
         market_fair_prob=0.10,
-        best_price=650,
+        best_price=best_price,
         best_book="draftkings",
-        ev_percent_model=25.0,
+        ev_percent_model=ev_percent_model,
         ev_percent_market=15.0,
         edge_vs_market=0.05,
-        books_quoting=4,
+        books_quoting=books_quoting,
         lineup_source=lineup_source,
     )
 
@@ -211,3 +217,105 @@ def test_hit_rate_by_run_hour_counts_a_manual_off_schedule_run_honestly():
     groups = {g.key: g for g in hit_rate_by_run_hour(resolved)}
     assert "15:00 ET" in groups
     assert groups["15:00 ET"].n == 1
+
+
+def test_units_ledger_only_counts_picks_that_clear_the_real_bet_bar():
+    # Pick A: real edge, "agree" tier, books_quoting=4 -> a genuine
+    # recommended bet, quarter-Kelly sized. Pick B: below
+    # MIN_EV_PERCENT_TO_RECOMMEND (3.0) -> never a real bet, must be
+    # excluded even though it's a resolved, won pick.
+    picks = [
+        _pick("Player A", model_prob=0.40, best_price=200, tier="agree", books_quoting=4, ev_percent_model=25.0),
+        _pick("Player B", model_prob=0.40, best_price=200, tier="agree", books_quoting=4, ev_percent_model=1.0),
+    ]
+    results = [_outcome("Player A", got_hr=True), _outcome("Player B", got_hr=True)]
+    resolved = resolve_picks(picks, results)
+    ledger = units_ledger(resolved)
+
+    assert len(ledger) == 1
+    assert ledger[0].player == "Player A"
+    assert ledger[0].units == 2.5
+    assert ledger[0].won is True
+    assert ledger[0].net_units == 5.0
+
+
+def test_units_ledger_records_a_real_loss_as_negative_net_units():
+    picks = [_pick("Player A", model_prob=0.40, best_price=200, tier="agree", books_quoting=4)]
+    results = [_outcome("Player A", got_hr=False)]
+    resolved = resolve_picks(picks, results)
+    ledger = units_ledger(resolved)
+
+    assert len(ledger) == 1
+    assert ledger[0].won is False
+    assert ledger[0].units == 2.5
+    assert ledger[0].net_units == -2.5
+
+
+def test_units_ledger_reads_tier_through_effective_tier_not_the_raw_field():
+    # A stale "agree" (books_quoting=1, below MIN_BOOKS_FOR_MARKET_AGREE)
+    # must be sized at the speculative fraction, not quarter-Kelly - see
+    # edges.effective_tier's docstring.
+    picks = [_pick("Player A", model_prob=0.40, best_price=200, tier="agree", books_quoting=1)]
+    results = [_outcome("Player A", got_hr=True)]
+    resolved = resolve_picks(picks, results)
+    ledger = units_ledger(resolved)
+
+    assert len(ledger) == 1
+    assert ledger[0].tier == "model_only"  # corrected, not the raw "agree"
+    assert ledger[0].units == 1.5  # speculative (1/8-Kelly) sizing, not 2.5 (quarter-Kelly)
+
+
+def test_units_ledger_excludes_a_pick_with_no_real_price():
+    picks = [_pick("Player A", model_prob=0.40, best_price=None, tier="no_market")]
+    results = [_outcome("Player A", got_hr=True)]
+    resolved = resolve_picks(picks, results)
+    assert units_ledger(resolved) == []
+
+
+def test_units_summary_splits_strong_vs_speculative_and_computes_roi():
+    picks = [
+        _pick("Player A", model_prob=0.40, best_price=200, tier="agree", books_quoting=4, game_date="2026-08-20"),
+        _pick("Player B", model_prob=0.25, best_price=400, tier="model_only", books_quoting=1, game_date="2026-08-20"),
+    ]
+    results = [_outcome("Player A", got_hr=True, game_date="2026-08-20"), _outcome("Player B", got_hr=False, game_date="2026-08-20")]
+    resolved = resolve_picks(picks, results)
+    summary = units_summary(units_ledger(resolved))
+
+    assert summary.n_bets == 2
+    assert summary.strong_n_bets == 1
+    assert summary.strong_net_units == 5.0
+    assert summary.speculative_n_bets == 1
+    assert summary.speculative_net_units == -1.0
+    assert summary.net_units == 4.0
+    assert summary.total_units_staked == 3.5  # 2.5 + 1.0
+    assert summary.roi_percent == round(4.0 / 3.5 * 100.0, 1)
+
+
+def test_units_summary_on_no_real_bets_returns_zeros_not_none_crash():
+    summary = units_summary([])
+    assert summary.n_bets == 0
+    assert summary.net_units == 0.0
+    assert summary.roi_percent is None
+
+
+def test_units_by_date_tracks_a_real_running_total_across_days():
+    picks = [
+        _pick("Player A", model_prob=0.40, best_price=200, tier="agree", books_quoting=4,
+              recorded_at="2026-08-20T18:00:00+00:00", game_date="2026-08-20"),
+        _pick("Player A", model_prob=0.40, best_price=200, tier="agree", books_quoting=4,
+              recorded_at="2026-08-21T18:00:00+00:00", game_date="2026-08-21"),
+    ]
+    results = [
+        _outcome("Player A", got_hr=True, game_date="2026-08-20"),
+        _outcome("Player A", got_hr=False, game_date="2026-08-21"),
+    ]
+    resolved = resolve_picks(picks, results)
+    daily = units_by_date(units_ledger(resolved))
+
+    assert len(daily) == 2
+    assert daily[0].game_date == "2026-08-20"
+    assert daily[0].net_units == 5.0
+    assert daily[0].cumulative_units == 5.0
+    assert daily[1].game_date == "2026-08-21"
+    assert daily[1].net_units == -2.5
+    assert daily[1].cumulative_units == 2.5

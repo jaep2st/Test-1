@@ -74,6 +74,26 @@ from .scoring import HitsScoreResult, HRScoreResult, TotalBasesScoreResult
 MIN_BOOKS_FOR_MARKET_AGREE = 2
 
 
+def effective_tier(tier: str, books_quoting: int) -> str:
+    """Corrects a possibly-stale recorded tier against this module's
+    current `MIN_BOOKS_FOR_MARKET_AGREE` invariant.
+
+    `results.PickRecord.tier` is a snapshot, baked in at record time from
+    whatever `EdgeCandidate.tier` computed that run - it's never
+    retroactively updated (see that field's docstring). A row recorded
+    before this project raised MIN_BOOKS_FOR_MARKET_AGREE (or before the
+    check existed at all) can still say `"agree"` with a `books_quoting`
+    that would no longer qualify under today's rule. Any code reading
+    historical tier data for a real decision - `betting.recommend_units`
+    chief among them, since a stale "agree" gets sized at quarter-Kelly
+    instead of the more conservative speculative fraction - should read
+    the tier through this function rather than trusting the raw field.
+    """
+    if tier == "agree" and books_quoting < MIN_BOOKS_FOR_MARKET_AGREE:
+        return "model_only"
+    return tier
+
+
 @dataclass(frozen=True)
 class EdgeCandidate:
     player: str
