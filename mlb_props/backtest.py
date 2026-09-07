@@ -19,6 +19,10 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from odds_monitor.ev import american_to_decimal
+
+from .betting import MIN_EV_PERCENT_TO_RECOMMEND, recommend_units
+from .edges import effective_tier
 from .results import ClvRecord, GameOutcome, PickRecord, load_clv, load_picks, load_results
 
 # Same US-Eastern convention this project already anchors "today" to (see
@@ -239,3 +243,137 @@ def hit_rate_by_run_hour(resolved: List[ResolvedPick]) -> List[HitRateGroup]:
     rather than a guess about which of the daily runs is "the good one."
     """
     return _group_hit_rate(resolved, lambda r: _run_hour_bucket(r.pick))
+
+
+@dataclass(frozen=True)
+class UnitsRecord:
+    """One resolved pick's real would-have-bet outcome, in units (1 unit =
+    1% of bankroll - see `betting.py`'s module docstring). Only a
+    resolved pick that would have actually cleared this project's own
+    real recommendation bar (`betting.MIN_EV_PERCENT_TO_RECOMMEND`, same
+    Kelly sizing as the live Recommended Bets section) gets a record here -
+    this is never every resolved pick, only the ones a real bettor
+    following this site would have staked money on.
+    """
+
+    game_date: str
+    player: str
+    market: str
+    tier: str  # effective_tier-corrected, not the possibly-stale raw field
+    best_price: int
+    units: float  # staked, always positive
+    won: bool
+    net_units: float  # +profit if won, -units if lost
+
+
+def units_ledger(resolved: List[ResolvedPick]) -> List[UnitsRecord]:
+    """Every resolved pick that would have been a real recommended bet,
+    re-sized with the exact same `betting.recommend_units` Kelly math the
+    live site uses - so "up/down X units" always means the same thing here
+    as it does on the Recommended Bets page a real bettor already trusts.
+
+    Deliberately recomputed from each pick's own recorded `model_prob`/
+    `best_price` rather than looked up from a separately-stored units
+    figure (this project didn't record one until now) - and deliberately
+    reads `tier` through `edges.effective_tier` first, since a stale
+    "agree" would otherwise get sized at quarter-Kelly (the strong-tier
+    multiplier) instead of the correct, more conservative speculative
+    fraction. A pick with no real price, below the EV bar, or with no
+    positive Kelly edge is silently excluded, same as the live page - it
+    was never a real bet, so it was never money won or lost.
+    """
+    ledger = []
+    for r in resolved:
+        p = r.pick
+        if p.best_price is None or p.ev_percent_model is None or p.ev_percent_model < MIN_EV_PERCENT_TO_RECOMMEND:
+            continue
+        tier = effective_tier(p.tier, p.books_quoting)
+        units = recommend_units(p.model_prob, p.best_price, tier)
+        if units is None:
+            continue
+        net_units = units * (american_to_decimal(p.best_price) - 1.0) if r.won else -units
+        ledger.append(
+            UnitsRecord(
+                game_date=p.game_date,
+                player=p.player,
+                market=p.market,
+                tier=tier,
+                best_price=p.best_price,
+                units=units,
+                won=r.won,
+                net_units=round(net_units, 4),
+            )
+        )
+    return ledger
+
+
+@dataclass(frozen=True)
+class UnitsSummary:
+    """The real, honest "are we up or down" headline for the Performance
+    page - see `units_ledger`'s docstring for exactly which resolved picks
+    count. Split by tier the same way the live Recommended Bets section
+    is (strong == tier "agree", speculative == everything else that still
+    cleared the bar), so the summary answers not just "up or down" but
+    "which kind of pick is actually carrying that number."
+    """
+
+    n_bets: int
+    total_units_staked: float
+    net_units: float
+    roi_percent: Optional[float]  # net_units / total_units_staked * 100; None if n_bets == 0
+    strong_n_bets: int
+    strong_net_units: float
+    speculative_n_bets: int
+    speculative_net_units: float
+
+
+def units_summary(ledger: List[UnitsRecord]) -> UnitsSummary:
+    if not ledger:
+        return UnitsSummary(
+            n_bets=0,
+            total_units_staked=0.0,
+            net_units=0.0,
+            roi_percent=None,
+            strong_n_bets=0,
+            strong_net_units=0.0,
+            speculative_n_bets=0,
+            speculative_net_units=0.0,
+        )
+    total_staked = sum(r.units for r in ledger)
+    net = sum(r.net_units for r in ledger)
+    strong = [r for r in ledger if r.tier == "agree"]
+    speculative = [r for r in ledger if r.tier != "agree"]
+    return UnitsSummary(
+        n_bets=len(ledger),
+        total_units_staked=round(total_staked, 2),
+        net_units=round(net, 2),
+        roi_percent=round(net / total_staked * 100.0, 1) if total_staked > 0 else None,
+        strong_n_bets=len(strong),
+        strong_net_units=round(sum(r.net_units for r in strong), 2),
+        speculative_n_bets=len(speculative),
+        speculative_net_units=round(sum(r.net_units for r in speculative), 2),
+    )
+
+
+@dataclass(frozen=True)
+class DailyUnits:
+    game_date: str
+    net_units: float  # that day's own net units, not cumulative
+    cumulative_units: float  # running total through this date, inclusive
+
+
+def units_by_date(ledger: List[UnitsRecord]) -> List[DailyUnits]:
+    """Real net units per real game date, plus the running cumulative total
+    through that date - the actual trend line behind the headline number,
+    sorted chronologically so a reader can see whether "up 4 units" is a
+    steady climb or one big day carrying a losing streak.
+    """
+    by_date: Dict[str, float] = {}
+    for r in ledger:
+        by_date[r.game_date] = by_date.get(r.game_date, 0.0) + r.net_units
+    out = []
+    running = 0.0
+    for game_date in sorted(by_date):
+        running += by_date[game_date]
+        out.append(DailyUnits(game_date=game_date, net_units=round(by_date[game_date], 2), cumulative_units=round(running, 2)))
+    return out

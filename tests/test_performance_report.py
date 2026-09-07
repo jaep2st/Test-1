@@ -46,6 +46,8 @@ def test_renders_without_error_on_a_completely_empty_data_dir(tmp_path):
     assert "Real hit rate by lineup source" in html
     assert "Historical hot-streak signal backtest" in html
     assert 'No historical backtest run yet' in html
+    assert "Units record" in html
+    assert "No resolved picks have cleared the real recommendation bar yet" in html
     assert "Methodology" in html
 
 
@@ -85,6 +87,51 @@ def test_clv_tiles_lead_the_at_a_glance_tiles(tmp_path):
     assert clv_pos < hit_rate_pos
 
 
+def test_units_tile_leads_even_clv(tmp_path):
+    # The units record is the one number on this page that needs no
+    # explanation - it should be the very first tile a reader sees.
+    html = render_performance_report(str(tmp_path))
+    units_pos = html.index("Units record")
+    clv_pos = html.index("Mean CLV")
+    assert units_pos < clv_pos
+
+
+def test_units_record_shows_a_real_loss_and_the_daily_breakdown(tmp_path):
+    os.makedirs(tmp_path / "picks")
+    os.makedirs(tmp_path / "results")
+    _append_jsonl([_pick("Player A", game_date="2026-08-20")], str(tmp_path / "picks" / "2026-08-20.jsonl"))
+    _append_jsonl(
+        [GameOutcome(game_date="2026-08-20", player="Player A", got_hr=False, got_2plus_tb=False, got_hit=False)],
+        str(tmp_path / "results" / "2026-08-20.jsonl"),
+    )
+    html = render_performance_report(str(tmp_path))
+    # recommend_units(0.15, 650, "agree") = 0.5u staked, lost -> -0.5u net,
+    # shown with an explicit sign so "down" is never ambiguous.
+    assert "-0.5u" in html
+    assert "2026-08-20" in html
+
+
+def test_units_record_excludes_a_stale_agree_tier_from_strong_sizing(tmp_path):
+    # books_quoting=1 means this pick's raw "agree" tier is stale (below
+    # edges.MIN_BOOKS_FOR_MARKET_AGREE) - the real units figure must come
+    # from the corrected speculative sizing, not quarter-Kelly.
+    os.makedirs(tmp_path / "picks")
+    os.makedirs(tmp_path / "results")
+    _append_jsonl(
+        [_pick("Player A", model_prob=0.40, best_price=200, books_quoting=1)],
+        str(tmp_path / "picks" / "2026-08-20.jsonl"),
+    )
+    _append_jsonl(
+        [GameOutcome(game_date="2026-08-20", player="Player A", got_hr=True, got_2plus_tb=False, got_hit=False)],
+        str(tmp_path / "results" / "2026-08-20.jsonl"),
+    )
+    html = render_performance_report(str(tmp_path))
+    assert "Speculative (model only)" in html
+    # A real quarter-Kelly "agree" bet at these odds would have netted
+    # +5.0u - the corrected speculative sizing must not show that number.
+    assert "+5.0u" not in html
+
+
 def test_renders_real_numbers_from_populated_data(tmp_path):
     os.makedirs(tmp_path / "picks")
     os.makedirs(tmp_path / "results")
@@ -109,6 +156,12 @@ def test_renders_real_numbers_from_populated_data(tmp_path):
     assert "100.0%" in html  # real hit rate tile
     assert "+15.4%" in html  # mean CLV tile
     assert "1 real day" in html
+    # Player A's default pick (model_prob=0.15, best_price=650, tier=agree,
+    # books_quoting=4, a real win) clears MIN_EV_PERCENT_TO_RECOMMEND, so it's
+    # a real recommended bet: recommend_units(0.15, 650, "agree") = 0.5u,
+    # net = 0.5 * (7.5 - 1) = 3.25 -> "+3.2u".
+    assert "+3.2u" in html  # units tile
+    assert "Units record" in html
     # 2026-08-20T18:00:00+00:00 (the _pick fixture's default recorded_at)
     # is 14:00 ET (EDT, UTC-4) - both the raw pick-log cell and the real
     # hit-rate-by-hour breakdown should show that real converted time.

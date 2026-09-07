@@ -8,7 +8,7 @@ appear in the report at all.
 from odds_monitor.ev import find_fair_prices
 from odds_monitor.models import PropLine
 
-from mlb_props.edges import build_hits_edges, build_hr_edges, build_total_bases_edges, rank_candidates
+from mlb_props.edges import build_hits_edges, build_hr_edges, build_total_bases_edges, effective_tier, rank_candidates
 from mlb_props.market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
 from mlb_props.scoring import HitsScoreResult, HRScoreResult, TotalBasesScoreResult
 
@@ -265,6 +265,29 @@ def test_a_second_independent_book_does_earn_the_agree_tier():
     edge = edges[0]
     assert edge.books_quoting == 2
     assert edge.tier == "agree"
+
+
+def test_effective_tier_demotes_a_stale_agree_tier_below_the_books_bar():
+    # A PickRecord.tier is baked in at record time and never retroactively
+    # corrected (see that field's docstring) - a row recorded before
+    # MIN_BOOKS_FOR_MARKET_AGREE existed/was raised can still say "agree"
+    # with a books_quoting that would no longer qualify. Real bet-sizing
+    # code (backtest.units_ledger) must read the tier through this
+    # function, not the raw stored field, or it sizes a thin single-book
+    # price at the aggressive quarter-Kelly "strong" fraction instead of
+    # the correct, more conservative speculative one.
+    assert effective_tier("agree", books_quoting=1) == "model_only"
+
+
+def test_effective_tier_leaves_a_real_agree_tier_alone():
+    assert effective_tier("agree", books_quoting=2) == "agree"
+    assert effective_tier("agree", books_quoting=5) == "agree"
+
+
+def test_effective_tier_leaves_non_agree_tiers_alone_regardless_of_books():
+    assert effective_tier("model_only", books_quoting=0) == "model_only"
+    assert effective_tier("no_market", books_quoting=0) == "no_market"
+    assert effective_tier("model_only_single_sided", books_quoting=1) == "model_only_single_sided"
 
 
 def test_hits_edge_uses_the_standard_line_not_a_longer_shot_tier():
