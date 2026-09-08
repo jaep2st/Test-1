@@ -1,6 +1,6 @@
-# Odds Discrepancy Monitor + MLB Home Run / 2+ Total Bases Finder
+# Odds Discrepancy Monitor + MLB Home Run / 2+ Total Bases Finder + NCAAF Game-Line Model
 
-Two tools sharing one odds pipeline:
+Three tools sharing one odds pipeline:
 
 - **`odds_monitor`** (`main.py`) - watches player-prop lines (points,
   assists, rebounds, etc.) across sportsbooks and alerts you whenever the
@@ -13,10 +13,17 @@ Two tools sharing one odds pipeline:
   composite score per player, then cross-checks that score against real
   cross-book odds (via the same no-vig EV math) to surface +EV spots and
   flag cross-book price discrepancies worth line-shopping.
+- **`ncaaf`** (`ncaaf_main.py`) - a weekly NCAA football (FBS) report that
+  ranks the best spread, moneyline, and total picks across the slate. It
+  blends opponent-adjusted SP+ ratings with this project's own point-in-time
+  Elo, layers on situational context (home field, altitude, rest, travel,
+  live kickoff weather), and cross-checks the resulting predicted score
+  against real cross-book odds to surface +EV spots - see "NCAAF quick
+  start" below.
 
 Pipeline: **fetch** lines from a provider -> **detect** cross-book gaps (or,
-for `mlb_props`, **compute** a no-vig fair price and **score** every batter)
--> **notify**/**report**.
+for `mlb_props`/`ncaaf`, **compute** a no-vig fair price and **score** every
+batter/game) -> **notify**/**report**.
 
 ## MLB props quick start (no API key needed)
 
@@ -184,6 +191,158 @@ HTML) as well, so they travel with the output itself, not just this doc:
 
 ---
 
+# NCAAF Game-Line Model (`ncaaf`)
+
+A weekly NCAA football (FBS) report that ranks the best point-spread,
+moneyline, and total picks across the slate.
+
+## How the model works
+
+1. **Power ratings** (`ncaaf/ratings.py`) - each team gets a blended power
+   rating from two independent sources, z-scored and combined (60/40):
+   - **SP+** (`ncaaf/cfbd.py`, via the College Football Data API) - Bill
+     Connelly's public, opponent-adjusted efficiency rating (overall +
+     offense/defense/special-teams splits).
+   - **Elo** (`ncaaf/elo.py`) - this project's own rating, computed purely
+     from real final scores with a margin-of-victory multiplier - genuinely
+     point-in-time (a team's rating after week N only reflects games
+     through week N), unlike SP+'s season-level number. A real second
+     opinion, not a duplicate of the same signal.
+
+   A third signal, **PPA** (predicted points added, also from CFBD), blends
+   into the offense/defense split specifically - a different methodology
+   (play-by-play efficiency) than SP+'s own, so agreement between the two
+   is a real cross-check.
+2. **Situational context** (`ncaaf/context.py`) - home-field advantage
+   (~2.3 points, the real modern-era average, 0 at a neutral site), a real
+   altitude bonus at high-elevation venues (Wyoming, Air Force, Colorado,
+   etc. - via CFBD's real venue elevation data), a rest-days edge, the away
+   team's real travel distance, and live wind/precipitation at kickoff
+   (totals only, via Open-Meteo).
+3. **Scoring** (`ncaaf/scoring.py`) - predicted margin comes from the
+   blended power-rating difference plus every context adjustment; predicted
+   total comes from the separate offense/defense split. Win/cover/over
+   probabilities use a normal approximation around those predictions - see
+   that module's docstring for the real, disclosed caveats (it doesn't
+   separately model "key number" push risk around 3/7 points, for example).
+4. **Market cross-check** (`ncaaf/game_odds.py`, `ncaaf/edges.py`) - real
+   cross-book spread/moneyline/total odds get de-vigged into a no-vig fair
+   price (reusing the same odds math `odds_monitor`/`mlb_props` use) and
+   compared against the model's own probability, the same **model edge**/
+   **market edge** dual-signal design as `mlb_props` - see
+   `mlb_props/edges.py`'s docstring for the shared philosophy.
+
+This is a transparent, hand-built statistical model - not a trained/
+calibrated one. Every weight and std-dev constant is disclosed in the
+module that uses it, and `ncaaf/refit.py` can fit real replacement weights
+against this project's own resolved picks once enough real history exists
+(a proposal to review, never an automatic live change - same posture
+`mlb_props/refit.py` uses).
+
+## Quick start (no API key needed)
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# Synthetic slate, ratings, and odds end-to-end:
+python ncaaf_main.py --mock --season 2026 --week 3 --mock-seed 1
+```
+
+## Running it for real
+
+| Data | Source | Needs a key? |
+|---|---|---|
+| Schedule, venues, SP+/PPA ratings, historical betting lines | College Football Data API (`api.collegefootballdata.com`) | Yes (free, email signup) |
+| Elo ratings | Computed by this project from CFBD's real game results | No (rides on the CFBD key above) |
+| Kickoff wind/precipitation | Open-Meteo | No |
+| Cross-book spread/moneyline/total odds | The Odds API (free tier, self-serve key) | Yes (report runs model-only, no odds/EV, without it) |
+
+```bash
+cp .env.example .env   # fill in CFBD_API_KEY and ODDS_API_KEY
+python ncaaf_main.py --season 2026 --week 6 --min-ev 2 --html-out report.html
+```
+
+Omit `--season`/`--week` in real mode and this project resolves the actual
+current week from CFBD's own `/calendar` endpoint - no manual tracking of
+"what week is it" needed.
+
+**Getting a College Football Data API key:**
+[collegefootballdata.com/key](https://collegefootballdata.com/key) - email
+signup, key emailed instantly, no card. Required for anything beyond
+`--mock` (schedule, ratings, venues, and historical-line backtesting all
+come from here).
+
+**Getting an Odds API key:** same as `mlb_props` above -
+[the-odds-api.com](https://the-odds-api.com), free tier, no card. Used for
+`americanfootball_ncaaf` spread/moneyline/total odds - a single bulk
+request per run covers the whole slate (see `ncaaf/market.py`), unlike
+`mlb_props`' player-prop odds which need one request per game.
+
+### Always-current live report via GitHub Actions + Pages
+
+The same `.github/workflows/mlb-props-report.yml` workflow that publishes
+the MLB report also builds and publishes this one, to `public/ncaaf/` on
+the same GitHub Pages site (one workflow, one Pages deployment - see that
+file's top comment for why both products have to be built together). Add a
+`CFBD_API_KEY` repository secret (Settings -> Secrets and variables ->
+Actions) alongside the existing `ODDS_API_KEY` and the NCAAF steps run
+automatically; leave it unset and only the MLB report publishes.
+
+### Real backtesting against real historical lines
+
+Unlike `mlb_props` (which has no access to real historical odds),
+`ncaaf/historical_backtest.py` backtests this project's own point-in-time
+Elo rating against CFBD's real historical betting lines
+(`GET /lines`, aggregated from real sportsbooks going back many seasons):
+
+```bash
+python ncaaf_main.py --historical-backtest \
+  --backtest-start-season 2021 --backtest-end-season 2024 \
+  --cfbd-api-key "$CFBD_API_KEY"
+```
+
+This validates the Elo half of the model only, not the full SP+-blended
+power rating - see that module's docstring for exactly why (CFBD's SP+ is
+a season-level number, not point-in-time, so using it for an early-season
+backtest would leak information about how the rest of that season played
+out). A real, disclosed partial validation, not a claim about the full
+model's historical performance.
+
+### Real track record (Performance page)
+
+Same real, permanently-recorded pick/result/CLV history design as
+`mlb_props` (see `ncaaf/results.py`/`ncaaf/backtest.py`), filed per real
+season/week instead of per day
+(`data/ncaaf/picks/<season>-wk<week>.jsonl`, etc.) since a college football
+"slate" is a week, not a day. `public/ncaaf/performance.html` shows real
+calibration, closing-line value, hit rate by market/tier, and a real units
+ledger - computed from resolved picks, never a synthetic backtest.
+
+### NCAAF CLI options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--season` / `--week` | resolved from CFBD's calendar | Real season year / week number |
+| `--season-type` | `regular` | `regular` or `postseason` |
+| `--mock` | off | Synthetic data end-to-end, no API key/network |
+| `--mock-seed` | random | Seed for reproducible `--mock` output |
+| `--min-ev` | `0` | Minimum EV% (by our model) required to show a pick |
+| `--top` | `40` | Max rows shown in the ranked picks table |
+| `--cfbd-api-key` | `$CFBD_API_KEY` | College Football Data API key - required for real (non-`--mock`) data |
+| `--odds-api-key` | `$ODDS_API_KEY` | The Odds API key - omit for a model-only report (no odds/EV) |
+| `--books` | all | Restrict to specific sportsbook IDs (repeatable) |
+| `--out` / `--html-out` | none | Console-text / styled HTML report output |
+| `--data-dir` | `data/ncaaf` | Root for the real pick/result/CLV history |
+| `--record-picks` | off | Append this run's picks to the real history |
+| `--performance-out` | none | Also render the Performance dashboard |
+| `--resolve-results` | off | Resolve `--season`/`--week`'s recorded picks against CFBD's real final scores |
+| `--record-clv` | off | Snapshot current odds to compute closing-line value |
+| `--historical-backtest` | off | Backtest point-in-time Elo vs. CFBD's real historical lines (`--backtest-start-season`/`--backtest-end-season`) |
+| `--log-level` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
+
+---
+
 # Odds Discrepancy Monitor (`odds_monitor`)
 
 ## Why Betstamp via its API, not scraping
@@ -312,10 +471,33 @@ mlb_props/
   html_report.py                     renders the styled, self-contained HTML report
 mlb_props_main.py          mlb_props entry point
 
-.github/workflows/
-  mlb-props-report.yml     runs mlb_props for real on a schedule/on-demand, publishes to GitHub Pages
+ncaaf/
+  cfbd.py                    College Football Data API client (schedule, SP+/PPA ratings, venues, historical lines)
+  schedule.py                 real weekly FBS slate + current-week resolution
+  elo.py                       this project's own point-in-time Elo rating
+  ratings.py                    blends SP+ + PPA + Elo into each team's power rating
+  context.py                     home field/altitude/rest/travel/weather situational adjustments
+  scoring.py                      predicted margin/total/win-cover-over probabilities
+  market.py                        real cross-book spread/moneyline/total odds (The Odds API) + mock
+  game_odds.py                      no-vig fair-price devig for game-line markets
+  edges.py                           combines model + market into ranked +EV candidates
+  betting.py                          fractional-Kelly recommended-bet sizing
+  pipeline.py                          orchestrates the full weekly run
+  report.py                             renders the console-text report
+  html_report.py                         renders the styled HTML report
+  site_style.py                           shared visual system (reuses mlb_props/site_style.py)
+  results.py                               real pick/result/CLV history (per real season/week)
+  backtest.py                               calibration/hit-rate/CLV/units aggregation from real history
+  refit.py                                   real logistic-regression weight refit + market-blend fit (proposal only)
+  historical_backtest.py                      real backtest vs. CFBD's historical betting lines (Elo only)
+  performance_report.py                        renders the Performance dashboard
+ncaaf_main.py               ncaaf entry point
 
-tests/                     pytest suite (odds_monitor detector/mock/CLI/EV math, mlb_props scoring/pipeline/HTML/CLI)
+.github/workflows/
+  mlb-props-report.yml     runs mlb_props AND ncaaf for real on a schedule/on-demand, publishes both to GitHub Pages
+
+tests/                     pytest suite (odds_monitor detector/mock/CLI/EV math, mlb_props scoring/pipeline/HTML/CLI,
+                            ncaaf elo/scoring/game_odds/edges/pipeline/CLI/HTML)
 ```
 
 ## Adding another data source or alert channel

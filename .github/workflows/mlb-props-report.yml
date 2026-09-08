@@ -1,41 +1,57 @@
 name: MLB props report
 
-# Regenerates the Longball Board report from live data and publishes it to
-# GitHub Pages. Runs on a GitHub-hosted runner, which has normal outbound
-# internet access - unlike a sandboxed Claude Code session, it can actually
-# reach baseballsavant.mlb.com, statsapi.mlb.com, api.open-meteo.com, and
-# The Odds API. Every run re-fetches everything fresh; nothing is cached
-# between runs.
+# Regenerates the Longball Board report AND the NCAAF game-line model's
+# report from live data and publishes both to the same GitHub Pages site -
+# MLB at the site root (public/index.html), NCAAF under public/ncaaf/ (see
+# ncaaf_main.py). One workflow, one Pages deployment: GitHub Pages replaces
+# the entire published tree on every deploy, so both products have to be
+# (re)built in the same job or one would silently wipe out the other's
+# pages on its own next run. Runs on a GitHub-hosted runner, which has
+# normal outbound internet access - unlike a sandboxed Claude Code session,
+# it can actually reach baseballsavant.mlb.com, statsapi.mlb.com,
+# api.collegefootballdata.com, api.open-meteo.com, and The Odds API. Every
+# run re-fetches everything fresh; nothing is cached between runs.
 #
 # Setup (one-time):
 #   1. Settings -> Secrets and variables -> Actions -> New repository secret
 #      -> name it ODDS_API_KEY, value = your free API key from
 #      https://the-odds-api.com (no card needed - signup emails you a key
-#      instantly). BETSTAMP_API_KEY also works instead if you have one - see
-#      mlb_props_main.build_providers(). Optional: BALLPARKPAL_API_KEY (from
-#      ballparkpal.com's own API Access page) upgrades park/weather scoring
-#      with real per-hitter modeled factors - see mlb_props/ballparkpal.py.
-#      The report runs fine without it; nothing else changes if it's unset.
-#   2. Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
-#   3. Run this workflow once manually (Actions tab -> "MLB props report" ->
+#      instantly). Used by both products (MLB player props and NCAAF game
+#      lines). BETSTAMP_API_KEY also works instead for the MLB side only -
+#      see mlb_props_main.build_providers(). Optional: BALLPARKPAL_API_KEY
+#      (from ballparkpal.com's own API Access page) upgrades MLB
+#      park/weather scoring with real per-hitter modeled factors - see
+#      mlb_props/ballparkpal.py. Each report runs fine without its optional
+#      key; nothing else changes if one is unset.
+#   2. New repository secret -> name it CFBD_API_KEY, value = your free
+#      College Football Data API key from
+#      https://collegefootballdata.com/key (email signup, key emailed
+#      instantly, no card). Required for the NCAAF report to run for real -
+#      without it, the NCAAF steps below are skipped entirely for that run
+#      (the MLB report still publishes normally).
+#   3. Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+#   4. Run this workflow once manually (Actions tab -> "MLB props report" ->
 #      "Run workflow") to publish the first version; after that the daily
 #      schedule below keeps it current. The schedule only fires once this
 #      file is on the repo's default branch - trigger it manually from a
 #      feature branch in the meantime.
-#   Nothing else to set up for the real track record/Performance page below -
-#   no new secret, no external database. It just needs `permissions.contents:
-#   write` (already set) so this workflow can commit its own generated
-#   history back to the repo.
+#   Nothing else to set up for either product's real track record/
+#   Performance page - no new secret, no external database. It just needs
+#   `permissions.contents: write` (already set) so this workflow can commit
+#   its own generated history back to the repo.
 #
-# The published page always reflects the most recent successful run - open
-# it any time for the current slate, or click "Run workflow" for an
-# on-demand refresh.
+# The published pages always reflect the most recent successful run - open
+# either any time for the current slate/week, or click "Run workflow" for
+# an on-demand refresh.
 #
-# Every run also grows this repo's real track record under data/ (picks/,
-# results/, clv/ - one JSONL file per day, see mlb_props/results.py) and
-# republishes public/performance.html from it (mlb_props/backtest.py +
-# performance_report.py) - the "is this model actually working" dashboard,
-# linked from the main report's nav. The git repo IS the database: a final
+# Every run also grows this repo's real track record under data/ (MLB:
+# picks/, results/, clv/ - one JSONL file per day, see mlb_props/results.py;
+# NCAAF: ncaaf/picks/, ncaaf/results/, ncaaf/clv/ - one JSONL file per real
+# season/week, see ncaaf/results.py) and republishes each product's own
+# performance.html from its own data (mlb_props/backtest.py +
+# performance_report.py; ncaaf/backtest.py + ncaaf/performance_report.py) -
+# each product's own "is this model actually working" dashboard, linked
+# from that product's nav. The git repo IS the database for both: a final
 # step below commits any changed data/ files straight back to this
 # workflow's own branch, which is why `permissions.contents` is `write`
 # here (every other permission stays read-only/deploy-only).
@@ -393,6 +409,91 @@ jobs:
           # pipeline - no network calls, no Odds API credits spent, just
           # reads data/*.jsonl and writes one HTML file.
           python mlb_props_main.py --performance-only --performance-out public/performance.html --data-dir data
+
+      - name: Determine the current real NCAAF season/week
+        id: ncaaf_week
+        # `if:` conditions can't reliably reference `secrets.*` directly
+        # (GitHub Actions only guarantees secrets are available via `env:`/
+        # `${{ secrets.X }}` in step inputs, not as a boolean in `if:`) - so
+        # the presence check happens inside this step's shell instead, and
+        # every later NCAAF step gates on this step's own `skip` OUTPUT
+        # rather than the secret itself.
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+        run: |
+          if [ -z "$CFBD_API_KEY" ]; then
+            echo "No CFBD_API_KEY secret configured - skipping the NCAAF report this run (MLB still publishes normally)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          # Resolved once here (rather than separately inside each ncaaf_main.py
+          # invocation below) so every step below - the main report, resolving
+          # LAST week's real outcomes, and recording closing-line value - agrees
+          # on the same real (season, week) for this run, and so the "previous
+          # week" arithmetic (for resolving results) only has to happen once.
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          from ncaaf.cfbd import CfbdClient
+          from ncaaf.schedule import current_season_week
+          season, week, season_type = current_season_week(CfbdClient())
+          print(f"season={season}")
+          print(f"week={week}")
+          print(f"season_type={season_type}")
+          print(f"prev_week={max(1, week - 1)}")
+          PY
+
+      - name: Generate NCAAF report from live data
+        if: ${{ steps.ncaaf_week.outputs.skip != 'true' }}
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          mkdir -p public/ncaaf
+          python ncaaf_main.py \
+            --season "${{ steps.ncaaf_week.outputs.season }}" \
+            --week "${{ steps.ncaaf_week.outputs.week }}" \
+            --season-type "${{ steps.ncaaf_week.outputs.season_type }}" \
+            --min-ev 0 \
+            --top 60 \
+            --html-out public/ncaaf/index.html \
+            --out public/ncaaf/report.txt \
+            --record-picks \
+            --data-dir data/ncaaf \
+            --log-level DEBUG
+
+      - name: Resolve NCAAF last week's real outcomes
+        if: ${{ steps.ncaaf_week.outputs.skip != 'true' }}
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+        run: |
+          # Always the *previous* real week (never the current one - this
+          # week's games aren't final yet): a week with no picks recorded
+          # (season opener, or a quiet week) is a real no-op, not an error -
+          # see resolve_results_for_week's docstring in ncaaf/results.py.
+          python ncaaf_main.py --resolve-results \
+            --season "${{ steps.ncaaf_week.outputs.season }}" \
+            --week "${{ steps.ncaaf_week.outputs.prev_week }}" \
+            --data-dir data/ncaaf
+
+      - name: Record NCAAF closing-line value
+        # Same "only the dedicated closing cron, or an explicit manual
+        # opt-in" posture as the MLB step above - see its comment.
+        if: ${{ steps.ncaaf_week.outputs.skip != 'true' && (github.event.schedule == '30 2 * * *' || inputs.record_clv) }}
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          python ncaaf_main.py --record-clv \
+            --season "${{ steps.ncaaf_week.outputs.season }}" \
+            --week "${{ steps.ncaaf_week.outputs.week }}" \
+            --data-dir data/ncaaf --log-level DEBUG
+
+      - name: Regenerate the NCAAF Performance dashboard from this run's finalized data
+        if: ${{ steps.ncaaf_week.outputs.skip != 'true' }}
+        run: |
+          # Same "after resolve/CLV, so it's never a full run stale" fix as
+          # the MLB Performance step above.
+          python ncaaf_main.py --performance-only --performance-out public/ncaaf/performance.html --data-dir data/ncaaf
 
       - uses: actions/upload-pages-artifact@v3
         with:
