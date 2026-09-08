@@ -289,6 +289,20 @@ file's top comment for why both products have to be built together). Add a
 Actions) alongside the existing `ODDS_API_KEY` and the NCAAF steps run
 automatically; leave it unset and only the MLB report publishes.
 
+CFBD's free tier caps real usage at 1,000 calls/month (no card - see
+[collegefootballdata.com/key](https://collegefootballdata.com/key)). A full
+live report costs ~14 real CFBD calls (ratings/schedule/venues/rest-days
+lookback), so the workflow deliberately throttles that expensive step to
+once a real day (plus any manual `workflow_dispatch` run) instead of
+running it on the MLB report's full 4x/day cadence - see the "Generate
+NCAAF report from live data" step's comment in that workflow file for the
+exact math. The published board itself stays live between those runs via a
+small committed baseline copy (`data/ncaaf/last_report/`), restored at the
+start of every run before anything regenerates it - see the "Restore the
+last published NCAAF board" step's comment for why that's needed (GitHub
+Pages replaces the entire site on every deploy, so a run that skips
+regeneration would otherwise take the page offline until the next one).
+
 ### Real backtesting against real historical lines
 
 Unlike `mlb_props` (which has no access to real historical odds),

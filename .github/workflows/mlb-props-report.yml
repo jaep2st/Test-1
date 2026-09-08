@@ -192,6 +192,30 @@ jobs:
           pip install -r requirements.txt
           pip install pybaseball pandas reportlab
 
+      - name: Restore the last published NCAAF board as this run's baseline
+        # public/ is rebuilt from scratch every run (nothing is cached
+        # between runs - see this file's top comment) and
+        # actions/deploy-pages REPLACES the entire live site with whatever
+        # this run's artifact contains. The NCAAF live-data report below is
+        # deliberately throttled to once a real day (see its own comment,
+        # and this file's CFBD_API_KEY setup note) to stay inside CFBD's
+        # real 1,000-call/month free tier - without this restore step, any
+        # run that skips regenerating it (three of the schedule's four
+        # daily fires) would deploy a public/ tree with NO
+        # public/ncaaf/index.html at all, taking the published NCAAF board
+        # offline until the next throttled run. `data/ncaaf/last_report/`
+        # is this project's own committed copy of the most recent real
+        # report (written by that throttled step, further down) - restored
+        # here as a baseline BEFORE anything else runs, so a fresh
+        # regeneration (when it does happen) naturally overwrites it, and
+        # a skipped run still deploys real, if slightly stale, content
+        # instead of a 404. `|| true` so a first-ever run (nothing
+        # published yet) doesn't fail this step.
+        run: |
+          mkdir -p public/ncaaf
+          cp data/ncaaf/last_report/index.html public/ncaaf/index.html 2>/dev/null || true
+          cp data/ncaaf/last_report/report.txt public/ncaaf/report.txt 2>/dev/null || true
+
       - name: Generate report from live data
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
@@ -412,12 +436,21 @@ jobs:
 
       - name: Determine the current real NCAAF season/week
         id: ncaaf_week
-        # `if:` conditions can't reliably reference `secrets.*` directly
-        # (GitHub Actions only guarantees secrets are available via `env:`/
-        # `${{ secrets.X }}` in step inputs, not as a boolean in `if:`) - so
-        # the presence check happens inside this step's shell instead, and
-        # every later NCAAF step gates on this step's own `skip` OUTPUT
-        # rather than the secret itself.
+        # CFBD's real free tier caps usage at 1,000 calls/month (no card,
+        # see collegefootballdata.com/key) - this cheap step (1 real call)
+        # runs on both NCAAF cadences below so it's always ready for
+        # whichever needs it, but the EXPENSIVE steps (full report
+        # generation, ~14 real calls) are separately throttled to once a
+        # day - see those steps' own `if:` conditions. `if:` conditions
+        # can't reliably reference `secrets.*` directly (GitHub Actions
+        # only guarantees secrets are available via `env:`/`${{ secrets.X
+        # }}` in step inputs, not as a boolean in `if:`) - so the presence
+        # check happens inside this step's shell instead, and every later
+        # NCAAF step gates on this step's own `skip` OUTPUT (checked with
+        # `== 'false'`, not `!= 'true'`, so a run where this step didn't
+        # fire at all - an empty output - correctly skips everything
+        # downstream too).
+        if: ${{ github.event.schedule == '0 16 * * *' || github.event.schedule == '30 2 * * *' || github.event_name == 'workflow_dispatch' }}
         env:
           CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
         run: |
@@ -443,7 +476,13 @@ jobs:
           PY
 
       - name: Generate NCAAF report from live data
-        if: ${{ steps.ncaaf_week.outputs.skip != 'true' }}
+        # Throttled to once a real day (plus any manual run) - unlike MLB's
+        # daily-turnover slate, a college football week barely changes
+        # hour to hour, and this step alone costs ~14 real CFBD calls (see
+        # ncaaf/ratings.py's module comments) - at the MLB schedule's full
+        # 4x/day cadence that alone would blow through CFBD's real 1,000-
+        # call/month free-tier cap by mid-month.
+        if: ${{ steps.ncaaf_week.outputs.skip == 'false' && (github.event.schedule == '0 16 * * *' || github.event_name == 'workflow_dispatch') }}
         env:
           CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
@@ -461,8 +500,24 @@ jobs:
             --data-dir data/ncaaf \
             --log-level DEBUG
 
+      - name: Persist this NCAAF board as tomorrow's baseline
+        # Same throttle as the step above (this only has something new to
+        # persist when that step actually ran). Copied into data/ so the
+        # existing "Commit real pick/result/CLV history" step further down
+        # picks it up and commits it with everything else in one `git add
+        # data/` - no separate commit logic needed. This is what the
+        # "Restore the last published NCAAF board" step (top of this job)
+        # reads back on a run that skips live regeneration.
+        if: ${{ steps.ncaaf_week.outputs.skip == 'false' && (github.event.schedule == '0 16 * * *' || github.event_name == 'workflow_dispatch') }}
+        run: |
+          mkdir -p data/ncaaf/last_report
+          cp public/ncaaf/index.html data/ncaaf/last_report/index.html
+          cp public/ncaaf/report.txt data/ncaaf/last_report/report.txt
+
       - name: Resolve NCAAF last week's real outcomes
-        if: ${{ steps.ncaaf_week.outputs.skip != 'true' }}
+        # Same once-a-day-plus-manual throttle as "Generate NCAAF report"
+        # above (1 more real CFBD call) - see that step's comment.
+        if: ${{ steps.ncaaf_week.outputs.skip == 'false' && (github.event.schedule == '0 16 * * *' || github.event_name == 'workflow_dispatch') }}
         env:
           CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
         run: |
@@ -477,8 +532,12 @@ jobs:
 
       - name: Record NCAAF closing-line value
         # Same "only the dedicated closing cron, or an explicit manual
-        # opt-in" posture as the MLB step above - see its comment.
-        if: ${{ steps.ncaaf_week.outputs.skip != 'true' && (github.event.schedule == '30 2 * * *' || inputs.record_clv) }}
+        # opt-in" posture as the MLB step above - see its comment. Makes no
+        # real CFBD network calls (only The Odds API) - CFBD_API_KEY is
+        # still needed below purely so CfbdClient's constructor doesn't
+        # raise, even though nothing calls it - so this isn't part of the
+        # once-a-day CFBD-call throttle the two steps above use.
+        if: ${{ steps.ncaaf_week.outputs.skip == 'false' && (github.event.schedule == '30 2 * * *' || inputs.record_clv) }}
         env:
           CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
@@ -489,7 +548,18 @@ jobs:
             --data-dir data/ncaaf --log-level DEBUG
 
       - name: Regenerate the NCAAF Performance dashboard from this run's finalized data
-        if: ${{ steps.ncaaf_week.outputs.skip != 'true' }}
+        # Deliberately unconditional (no CFBD_API_KEY/ncaaf_week check) -
+        # this makes zero real network calls of its own (just reads
+        # data/ncaaf/*.jsonl, same as mlb_props' --performance-only), and
+        # it needs to run every single time regardless of which NCAAF
+        # steps above fired this run - it's the one piece of
+        # public/ncaaf/* NOT covered by the baseline-restore step at the
+        # top of this job, so skipping it on an off-cadence run would 404
+        # public/ncaaf/performance.html instead of keeping it live and
+        # current. A `data/ncaaf` directory that doesn't exist yet (a
+        # repo's very first run, before any NCAAF data has ever been
+        # recorded) still renders a real, honest "0 picks recorded" page -
+        # see render_performance_report's handling of a missing/empty dir.
         run: |
           # Same "after resolve/CLV, so it's never a full run stale" fix as
           # the MLB Performance step above.

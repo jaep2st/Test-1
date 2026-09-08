@@ -104,7 +104,7 @@ def _zscore(values: Dict[str, float]) -> Dict[str, float]:
 
 
 class CfbdRatingsProvider(RatingsProvider):
-    def __init__(self, client=None, elo_seasons_back: int = 2):
+    def __init__(self, client=None, elo_seasons_back: int = 1):
         from .cfbd import CfbdClient
 
         self.client = client or CfbdClient()
@@ -112,14 +112,34 @@ class CfbdRatingsProvider(RatingsProvider):
         # Elo - carries real signal forward through the season-transition
         # regression in elo.py, rather than starting every team from a
         # blank BASE_RATING slate on day one of the current season.
+        # Defaults to 1 (not more): each extra season costs 2 more real
+        # `client.games()` calls per `get_ratings()` run (regular +
+        # postseason), against CFBD's free-tier cap of 1,000 calls/month
+        # (see collegefootballdata.com/key) - raise it if you're on a paid
+        # Patreon tier and want a better-warmed-up rating.
         self.elo_seasons_back = elo_seasons_back
 
-    def _elo_ratings(self, season: int) -> Dict[str, float]:
+    def _elo_ratings(self, season: int) -> "tuple[Dict[str, float], Dict[str, int]]":
+        """Returns `(elo_ratings, games_played)` - `games_played` is a real
+        side-effect tally of the CURRENT season's completed regular-season
+        games, reusing the exact same `client.games(season, "regular")`
+        fetch this method already needs for Elo instead of `get_ratings`
+        re-fetching it separately. CFBD's free tier caps real usage at
+        1,000 calls/month (see collegefootballdata.com/key) - a weekly-
+        cadence sport has no real need to re-fetch the same season's games
+        twice in one run just to avoid threading one extra return value.
+        """
         games: List[GameResult] = []
+        games_played: Dict[str, int] = {}
         for year in range(season - self.elo_seasons_back, season + 1):
             for raw in self.client.games(year, season_type="regular"):
                 if not raw.get("completed"):
                     continue
+                if year == season:
+                    for side in ("homeTeam", "awayTeam"):
+                        team = raw.get(side)
+                        if team:
+                            games_played[team] = games_played.get(team, 0) + 1
                 try:
                     games.append(
                         GameResult(
@@ -153,20 +173,12 @@ class CfbdRatingsProvider(RatingsProvider):
                     )
                 except (KeyError, TypeError, ValueError):
                     logger.warning("Skipping unparsable completed postseason game for Elo: %r", raw)
-        return compute_elo_ratings(games)
+        return compute_elo_ratings(games), games_played
 
     def get_ratings(self, season: int) -> Dict[str, TeamRating]:
         sp_rows = self.client.ratings_sp(season)
         ppa_rows = self.client.ppa_teams(season)
-        elo = self._elo_ratings(season)
-        games_played: Dict[str, int] = {}
-        for raw in self.client.games(season, season_type="regular"):
-            if not raw.get("completed"):
-                continue
-            for side in ("homeTeam", "awayTeam"):
-                team = raw.get(side)
-                if team:
-                    games_played[team] = games_played.get(team, 0) + 1
+        elo, games_played = self._elo_ratings(season)
 
         sp_overall_raw: Dict[str, float] = {}
         sp_offense_raw: Dict[str, float] = {}
