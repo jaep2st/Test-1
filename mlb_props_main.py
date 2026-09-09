@@ -65,6 +65,7 @@ from mlb_props.pipeline import run_pipeline
 from mlb_props.pdf_report import render_pdf_report
 from mlb_props.report import render_report
 from mlb_props.backtest import last_priced_pick_by_key
+from mlb_props.betting import withdrawn_recommendations
 from mlb_props.results import load_picks, record_closing_odds, record_picks, resolve_results_for_date
 from mlb_props.schedule import MLB_STATS_API_BASE, MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
 from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider, _find_player_row
@@ -868,9 +869,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # project saw for it. Empty on the day's first run or in --mock
         # mode (no file to load yet) - render_html_report treats that the
         # same as always: no fallback, unchanged rendering.
+        # Same data also drives withdrawn_recommendations below - a pick an
+        # earlier run today actually recommended that this run's own
+        # numbers no longer back (line moved, tier lost consensus, market
+        # closed, edge evaporated) - kept visible instead of just vanishing.
         todays_picks_path = os.path.join(args.data_dir, "picks", f"{args.game_date.isoformat()}.jsonl")
-        stale_price_lookup = last_priced_pick_by_key(load_picks(todays_picks_path))
-        html_text = render_html_report(report, top=args.top, is_mock=args.mock, stale_price_lookup=stale_price_lookup)
+        todays_prior_picks = load_picks(todays_picks_path)
+        stale_price_lookup = last_priced_pick_by_key(todays_prior_picks)
+        withdrawn = withdrawn_recommendations(report, todays_prior_picks)
+        html_text = render_html_report(
+            report, top=args.top, is_mock=args.mock, stale_price_lookup=stale_price_lookup, withdrawn=withdrawn
+        )
         with open(args.html_out, "w") as f:
             f.write(html_text)
         logger.info("Wrote HTML report to %s", args.html_out)

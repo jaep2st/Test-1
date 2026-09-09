@@ -14,10 +14,12 @@ from mlb_props.betting import (
     build_recommended_bets,
     kelly_fraction,
     recommend_units,
+    withdrawn_recommendations,
 )
 from odds_monitor.ev import american_to_implied_prob
 from mlb_props.edges import EdgeCandidate
 from mlb_props.pipeline import SlateReport
+from mlb_props.results import PickRecord
 from odds_monitor.models import PropLine
 
 
@@ -179,5 +181,99 @@ def test_build_recommended_bets_combines_all_three_markets():
     hits = _agree_edge("Player I", "batter_hits")
     strong, _ = build_recommended_bets(_report(hr_edges=[hr], tb_edges=[tb], hits_edges=[hits]))
     assert {r.player for r in strong} == {"Player G", "Player H", "Player I"}
+
+
+# --- withdrawn_recommendations: a pick a prior run today actually
+# recommended that this run's own numbers no longer back. Real ask: never
+# let it just vanish - it must show up here with an honest reason. ---
+
+
+def _prior_pick(
+    player,
+    market="batter_home_runs",
+    event="Team A @ Team B",
+    tier="agree",
+    model_prob=0.40,
+    best_price=200,
+    best_book="draftkings",
+    ev_percent_model=10.0,
+    books_quoting=2,
+    recorded_at="2026-08-20T16:00:00+00:00",
+    game_date="2026-08-20",
+):
+    return PickRecord(
+        game_date=game_date, recorded_at=recorded_at, player=player, market=market, event=event, tier=tier,
+        model_score=70.0, model_prob=model_prob, bp_model_prob=None, market_fair_prob=0.30,
+        best_price=best_price, best_book=best_book, ev_percent_model=ev_percent_model, ev_percent_market=5.0,
+        edge_vs_market=0.10, books_quoting=books_quoting,
+    )
+
+
+def _no_market_edge(player, market="batter_home_runs", event="Team A @ Team B"):
+    return EdgeCandidate(
+        player=player, market=market, event=event, model_score=70.0, model_prob=0.15, market_fair_prob=None,
+        best_line=None, ev_percent_model=None, ev_percent_market=None, edge_vs_market=None, price_spread_percent=None,
+        books_quoting=0, park="Test Park", wind_out_mph=0.0, temp_f=70.0, is_dome=False, weather_boost_pct=0.0,
+    )
+
+
+def test_withdrawn_recommendations_flags_a_pick_whose_edge_dropped_below_the_bar():
+    prior = _prior_pick("Player A", ev_percent_model=10.0)
+    now_below_bar = _agree_edge("Player A", "batter_home_runs", ev_percent_model=1.0)
+    withdrawn = withdrawn_recommendations(_report(hr_edges=[now_below_bar]), [prior])
+    assert len(withdrawn) == 1
+    assert withdrawn[0].player == "Player A"
+    assert "edge dropped to 1.0%" in withdrawn[0].reason
+
+
+def test_withdrawn_recommendations_flags_a_pick_whose_market_closed():
+    # Same real scenario the stale-price fallback exists for - a game
+    # starting and the book pulling the prop entirely.
+    prior = _prior_pick("Player A")
+    now_no_market = _no_market_edge("Player A")
+    withdrawn = withdrawn_recommendations(_report(hr_edges=[now_no_market]), [prior])
+    assert len(withdrawn) == 1
+    assert "market closed" in withdrawn[0].reason
+
+
+def test_withdrawn_recommendations_flags_a_pick_no_longer_scored_this_run():
+    prior = _prior_pick("Player A")
+    withdrawn = withdrawn_recommendations(_report(), [prior])
+    assert len(withdrawn) == 1
+    assert "not scored this run" in withdrawn[0].reason
+
+
+def test_withdrawn_recommendations_excludes_a_pick_still_recommended_now():
+    prior = _prior_pick("Player A", ev_percent_model=10.0)
+    still_good = _agree_edge("Player A", "batter_home_runs", ev_percent_model=8.0)
+    withdrawn = withdrawn_recommendations(_report(hr_edges=[still_good]), [prior])
+    assert withdrawn == []
+
+
+def test_withdrawn_recommendations_excludes_a_prior_pick_that_never_cleared_the_bar():
+    # Never a real recommendation to begin with - nothing to withdraw.
+    prior = _prior_pick("Player A", ev_percent_model=1.0)
+    withdrawn = withdrawn_recommendations(_report(), [prior])
+    assert withdrawn == []
+
+
+def test_withdrawn_recommendations_reason_mentions_the_real_price_move():
+    prior = _prior_pick("Player A", best_price=200, ev_percent_model=10.0)
+    moved_and_below_bar = _edge(
+        "Player A", "batter_home_runs", 1.0,
+        {"model_prob": 0.40, "market_fair_prob": 0.30, "ev_percent_market": 5.0, "edge_vs_market": 0.10},
+        price=-150,
+    )
+    withdrawn = withdrawn_recommendations(_report(hr_edges=[moved_and_below_bar]), [prior])
+    assert len(withdrawn) == 1
+    assert "price moved +200 → -150" in withdrawn[0].reason
+
+
+def test_withdrawn_recommendations_uses_only_the_latest_prior_snapshot_per_key():
+    earlier = _prior_pick("Player A", ev_percent_model=10.0, recorded_at="2026-08-20T14:00:00+00:00")
+    later = _prior_pick("Player A", ev_percent_model=10.0, recorded_at="2026-08-20T18:00:00+00:00")
+    withdrawn = withdrawn_recommendations(_report(), [earlier, later])
+    assert len(withdrawn) == 1
+    assert withdrawn[0].recorded_at == "2026-08-20T18:00:00+00:00"
 
 

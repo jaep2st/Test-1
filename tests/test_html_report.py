@@ -533,6 +533,41 @@ def test_reco_row_does_not_flag_a_real_multi_book_market():
     assert "3 books quoting" in row_html
 
 
+def _withdrawn(**overrides):
+    from mlb_props.betting import WithdrawnRecommendation
+
+    fields = dict(
+        player="Player A", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+        prior_tier="agree", prior_price=200, prior_book="draftkings", prior_ev_percent=10.0, prior_units=2.5,
+        recorded_at="2026-08-20T16:00:00+00:00", reason="edge dropped to 1.0% (below the 3% bar)",
+    )
+    fields.update(overrides)
+    return WithdrawnRecommendation(**fields)
+
+
+def test_recommended_bets_section_shows_a_withdrawn_pick_with_its_real_reason():
+    # Real ask: a once-recommended pick that stops qualifying must not
+    # just vanish - it should show up here, clearly marked, with the real
+    # reason, so nobody bets it off an old screenshot.
+    from mlb_props.html_report import _recommended_bets_section
+
+    html_text = _recommended_bets_section([], [], "2026-08-20", withdrawn=[_withdrawn()])
+    assert "No longer recommended" in html_text
+    assert "Player A" in html_text
+    assert "edge dropped to 1.0%" in html_text
+    assert "+200" in html_text
+    assert "draftkings" in html_text.lower()
+
+
+def test_recommended_bets_section_omits_the_withdrawn_block_when_nothing_withdrawn():
+    from mlb_props.html_report import _recommended_bets_section
+
+    html_text = _recommended_bets_section([], [], "2026-08-20", withdrawn=[])
+    assert "No longer recommended" not in html_text
+    html_text_default = _recommended_bets_section([], [], "2026-08-20")
+    assert "No longer recommended" not in html_text_default
+
+
 def test_reco_group_caps_visible_rows_and_defers_the_rest():
     from mlb_props.betting import RecommendedBet
     from mlb_props.html_report import _RECO_VISIBLE_CAP, _reco_group

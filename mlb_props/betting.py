@@ -43,9 +43,10 @@ from typing import Dict, List, Optional, Tuple
 
 from odds_monitor.ev import american_to_decimal, decimal_to_american
 
-from .edges import EdgeCandidate
+from .edges import EdgeCandidate, effective_tier
 from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES
 from .pipeline import SlateReport
+from .results import PickRecord
 
 # Real bet-sizing constants, every one deliberately conservative - see
 # module docstring for why each exists.
@@ -217,3 +218,118 @@ def build_recommended_bets(report: SlateReport) -> Tuple[List[RecommendedBet], L
     strong = sorted((r for r in recs if r.tier == "agree"), key=lambda r: r.ev_percent_model, reverse=True)
     speculative = sorted((r for r in recs if r.tier != "agree"), key=lambda r: r.ev_percent_model, reverse=True)
     return strong, speculative
+
+
+@dataclass(frozen=True)
+class WithdrawnRecommendation:
+    """A pick an earlier run *today* actually recommended (cleared the
+    same real bar as `build_recommended_bets`) that this run no longer
+    does. Real user report: a recommendation that just silently vanishes
+    between runs is indistinguishable from "did I imagine that" - this
+    keeps it visible, with the real reason it dropped, rather than
+    deleting it the moment it stops qualifying. Never a new source of
+    picks to bet - a note not to bet this one if you saw it earlier."""
+
+    player: str
+    market: str
+    market_label: str
+    event: str
+    prior_tier: str
+    prior_price: int
+    prior_book: str
+    prior_ev_percent: float
+    prior_units: float
+    # ISO 8601 UTC - PickRecord.recorded_at of the last run that actually
+    # recommended this pick, so "earlier today" has a real timestamp.
+    recorded_at: str
+    reason: str
+
+
+def _pick_was_recommended(p: PickRecord) -> bool:
+    """Same real bar `_to_recommendation` checks on a live `EdgeCandidate`,
+    applied to an already-recorded `PickRecord` snapshot - reads tier
+    through `effective_tier` for the same reason `units_ledger` does (see
+    that function's docstring): a stale "agree" recorded before
+    MIN_BOOKS_FOR_MARKET_AGREE existed/changed shouldn't count as a real
+    strong recommendation today.
+    """
+    if p.best_price is None or p.best_book is None:
+        return False
+    if p.ev_percent_model is None or p.ev_percent_model < MIN_EV_PERCENT_TO_RECOMMEND:
+        return False
+    tier = effective_tier(p.tier, p.books_quoting)
+    return recommend_units(p.model_prob, p.best_price, tier) is not None
+
+
+def _reason_for_withdrawal(prior: PickRecord, current: Optional[EdgeCandidate]) -> str:
+    """Plain-language, honest explanation of why a once-recommended pick
+    no longer is - "whatever that reason is," so it's never just a bare
+    "no longer recommended" with nothing to check it against."""
+    if current is None:
+        return "not scored this run (game/market may be off today's slate)"
+    if not current.has_market_data:
+        return "market closed - no price available now (game may have started)"
+    clauses = []
+    if current.best_line and current.best_line.odds != prior.best_price:
+        clauses.append(f"price moved {prior.best_price:+d} → {current.best_line.odds:+d}")
+    cur_tier = effective_tier(current.tier, current.books_quoting)
+    if effective_tier(prior.tier, prior.books_quoting) == "agree" and cur_tier != "agree":
+        clauses.append(f"lost book consensus - tier dropped to {cur_tier.replace('_', ' ')}")
+    if current.ev_percent_model is None:
+        clauses.append("no longer shows a positive edge")
+    elif current.ev_percent_model < MIN_EV_PERCENT_TO_RECOMMEND:
+        clauses.append(f"edge dropped to {current.ev_percent_model:.1f}% (below the {MIN_EV_PERCENT_TO_RECOMMEND:.0f}% bar)")
+    if not clauses:
+        clauses.append("no longer sizes to a real recommended position")
+    return "; ".join(clauses)
+
+
+def withdrawn_recommendations(report: SlateReport, prior_picks: List[PickRecord]) -> List[WithdrawnRecommendation]:
+    """Every pick a prior run recorded *today* that actually cleared the
+    real recommend bar at the time (see `_pick_was_recommended`) but this
+    run's own candidates no longer do - the line moved, the tier lost its
+    cross-book consensus, the market closed once the game started, or the
+    edge just evaporated. Kept visible (not silently dropped) with the
+    real reason, so seeing an old recommendation later today never means
+    accidentally betting something that stopped being good hours ago.
+
+    `prior_picks` is every pick recorded by earlier runs today, loaded
+    before this run's own candidates were recorded - same data,
+    same timing, as html_report.py's stale-price fallback (see
+    mlb_props_main.py's call site).
+    """
+    current_by_key: Dict[Tuple[str, str, str], EdgeCandidate] = {}
+    for c in report.hr_edges + report.tb_edges + report.hits_edges:
+        current_by_key[(c.player.strip().lower(), c.market.lower(), c.event.lower())] = c
+
+    strong, speculative = build_recommended_bets(report)
+    currently_recommended = {(r.player.strip().lower(), r.market.lower(), r.event.lower()) for r in strong + speculative}
+
+    latest_prior: Dict[Tuple[str, str, str], PickRecord] = {}
+    for p in prior_picks:
+        prev = latest_prior.get(p.key)
+        if prev is None or p.recorded_at > prev.recorded_at:
+            latest_prior[p.key] = p
+
+    withdrawn = []
+    for key, prior in latest_prior.items():
+        if key in currently_recommended or not _pick_was_recommended(prior):
+            continue
+        tier = effective_tier(prior.tier, prior.books_quoting)
+        units = recommend_units(prior.model_prob, prior.best_price, tier) or 0.0
+        withdrawn.append(
+            WithdrawnRecommendation(
+                player=prior.player,
+                market=prior.market,
+                market_label=_MARKET_LABELS.get(prior.market, prior.market),
+                event=prior.event,
+                prior_tier=tier,
+                prior_price=prior.best_price,
+                prior_book=prior.best_book,
+                prior_ev_percent=prior.ev_percent_model,
+                prior_units=units,
+                recorded_at=prior.recorded_at,
+                reason=_reason_for_withdrawal(prior, current_by_key.get(key)),
+            )
+        )
+    return sorted(withdrawn, key=lambda w: w.recorded_at, reverse=True)

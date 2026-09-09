@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from .betting import MIN_EV_PERCENT_TO_RECOMMEND, RecommendedBet, build_recommended_bets
+from .betting import MIN_EV_PERCENT_TO_RECOMMEND, RecommendedBet, WithdrawnRecommendation, build_recommended_bets
 from .edges import MIN_BOOKS_FOR_MARKET_AGREE, EdgeCandidate
 from .hot_streak import HeatIndex
 from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES, book_display_name
@@ -566,11 +566,41 @@ def _reco_group(
     </div>"""
 
 
+def _withdrawn_row(w: WithdrawnRecommendation) -> str:
+    when = _fmt_start_time_et(w.recorded_at)
+    return f"""
+      <div class="withdrawn-row">
+        <div class="who">{_esc(w.player)} <span class="bet">{_esc(w.market_label)}</span></div>
+        <div class="was">Was recommended: <b>{w.prior_price:+d}</b> {_esc(book_display_name(w.prior_book))} &middot; {w.prior_ev_percent:.1f}% EV &middot; {w.prior_units:g}u &middot; {_esc(w.event)}</div>
+        <div class="reason">Now: {_esc(w.reason)}</div>
+        <div class="when">Last recommended {_esc(when)}</div>
+      </div>"""
+
+
+def _withdrawn_section(withdrawn: List[WithdrawnRecommendation]) -> str:
+    """A once-real recommendation an earlier run today made, that this
+    run's own numbers no longer back - shown, not deleted, exactly
+    because "it just disappeared" leaves a person unsure whether they
+    imagined seeing it. Renders nothing at all when there's nothing to
+    show (the common case) - never an empty "all clear" box cluttering a
+    page that's otherwise all about what's still good tonight.
+    """
+    if not withdrawn:
+        return ""
+    rows = "".join(_withdrawn_row(w) for w in withdrawn)
+    return f"""
+    <div class="reco-group withdrawn-group">
+      <div class="reco-group-head"><h3>No longer recommended ({len(withdrawn)})</h3><span class="hint">Recommended by an earlier run today, not anymore - don't bet these off an old screenshot</span></div>
+      <div class="withdrawn-list">{rows}</div>
+    </div>"""
+
+
 def _recommended_bets_section(
     strong: List[RecommendedBet],
     speculative: List[RecommendedBet],
     game_date_iso: str,
     all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None,
+    withdrawn: Optional[List[WithdrawnRecommendation]] = None,
 ) -> str:
     strong_html = _reco_group(
         f"Strong plays ({len(strong)})",
@@ -586,6 +616,7 @@ def _recommended_bets_section(
         game_date_iso,
         all_props_by_player,
     )
+    withdrawn_html = _withdrawn_section(withdrawn or [])
     return f"""
   <section class="section" id="reco" style="margin-top:0;">
     <div class="section-head">
@@ -594,6 +625,7 @@ def _recommended_bets_section(
     </div>
     {strong_html}
     {speculative_html}
+    {withdrawn_html}
     <div class="reco-disclosure">
       <b>How sizing works:</b> "size" is fractional Kelly - quarter-Kelly (0.25x) for Strong plays, an extra-conservative
       1/8-Kelly (0.125x) for Speculative ones - expressed in units where <b>1 unit = 1% of your bankroll</b> (this project
@@ -753,6 +785,7 @@ def render_html_report(
     is_mock: bool = False,
     generated_at: Optional[datetime] = None,
     stale_price_lookup: Optional[StalePriceLookup] = None,
+    withdrawn: Optional[List[WithdrawnRecommendation]] = None,
 ) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
     envs = report.matchup_environments
@@ -859,7 +892,7 @@ def render_html_report(
 
   {_quick_nav()}
 
-  {_recommended_bets_section(strong_recs, speculative_recs, report.game_date.isoformat(), all_props_by_player)}
+  {_recommended_bets_section(strong_recs, speculative_recs, report.game_date.isoformat(), all_props_by_player, withdrawn)}
 
   {_my_bets_section()}
 
