@@ -11,6 +11,7 @@ from mlb_props.backtest import (
     hit_rate_by_market,
     hit_rate_by_run_hour,
     hit_rate_by_tier,
+    last_priced_pick_by_key,
     latest_results_by_key,
     recorded_at_et,
     resolve_picks,
@@ -82,6 +83,37 @@ def test_resolve_picks_keeps_only_the_latest_same_day_pick_snapshot():
     resolved = resolve_picks(picks, results)
     assert len(resolved) == 1
     assert resolved[0].pick.model_prob == 0.30
+
+
+def test_resolve_picks_prefers_the_latest_priced_snapshot_over_a_later_unpriced_one():
+    # Confirmed live (2026-09-08, Coby Mayo/Guardians@Orioles): a real
+    # confirmed agree-tier pick at 4pm ET had its market pulled entirely by
+    # 6:36pm ET once the game reached "Warmup" (best_price=None,
+    # tier="no_market") - a completely normal, expected market-closing
+    # pattern near first pitch. The later, unpriced snapshot must not erase
+    # the earlier real, bettable price from the historical record - "latest
+    # wins" would otherwise silently drop a real recommended bet from every
+    # stat on the Performance page.
+    picks = [
+        _pick("Player A", best_price=650, tier="agree", recorded_at="2026-08-20T16:00:00+00:00"),
+        _pick("Player A", best_price=None, tier="no_market", recorded_at="2026-08-20T22:36:00+00:00"),
+    ]
+    results = [_outcome("Player A", got_hr=True)]
+    resolved = resolve_picks(picks, results)
+    assert len(resolved) == 1
+    assert resolved[0].pick.best_price == 650
+    assert resolved[0].pick.tier == "agree"
+
+
+def test_resolve_picks_keeps_the_latest_when_neither_snapshot_was_ever_priced():
+    picks = [
+        _pick("Player A", best_price=None, tier="no_market", recorded_at="2026-08-20T11:00:00+00:00"),
+        _pick("Player A", best_price=None, tier="no_market", recorded_at="2026-08-20T18:00:00+00:00"),
+    ]
+    results = [_outcome("Player A", got_hr=True)]
+    resolved = resolve_picks(picks, results)
+    assert len(resolved) == 1
+    assert resolved[0].pick.recorded_at == "2026-08-20T18:00:00+00:00"
 
 
 def test_resolve_picks_keeps_each_days_pick_in_a_real_multi_day_series():
@@ -319,3 +351,27 @@ def test_units_by_date_tracks_a_real_running_total_across_days():
     assert daily[1].game_date == "2026-08-21"
     assert daily[1].net_units == -2.5
     assert daily[1].cumulative_units == 2.5
+
+
+def test_last_priced_pick_by_key_keeps_the_priced_snapshot_over_a_later_unpriced_one():
+    # html_report.py's stale-pregame-price fallback (a started game whose
+    # roster panel falls back to the last real price this project recorded
+    # for it today) is built from this function - it must never surface
+    # the priceless "market pulled near first pitch" snapshot instead of
+    # the real, once-bettable price. Same real scenario as
+    # test_resolve_picks_prefers_the_latest_priced_snapshot_over_a_later_unpriced_one.
+    picks = [
+        _pick("Player A", best_price=650, tier="agree", recorded_at="2026-08-20T16:00:00+00:00"),
+        _pick("Player A", best_price=None, tier="no_market", recorded_at="2026-08-20T22:36:00+00:00"),
+    ]
+    latest = last_priced_pick_by_key(picks)
+    assert len(latest) == 1
+    pick = latest[picks[0].key]
+    assert pick.best_price == 650
+    assert pick.tier == "agree"
+
+
+def test_last_priced_pick_by_key_keys_by_player_market_event_not_game_date():
+    picks = [_pick("Player A", best_price=650, market="batter_home_runs")]
+    latest = last_priced_pick_by_key(picks)
+    assert set(latest.keys()) == {("player a", "batter_home_runs", "team a @ team b")}

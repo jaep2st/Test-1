@@ -101,12 +101,64 @@ def _latest_pick_per_game(picks: List[PickRecord]) -> Dict[Tuple[str, str, str, 
     function's output). Adding `game_date` to the key fixes it without
     touching `PickRecord.key`/`latest_pick_per_key`, which are still
     correct for their own single-day callers.
+
+    Plain "latest `recorded_at` wins" has a second, separate bug: books
+    routinely pull a player prop entirely once a game nears first pitch
+    (confirmed live 2026-09-08 - Coby Mayo, Guardians @ Orioles: a real
+    confirmed agree-tier pick at -150 recorded 4pm ET had its market
+    pulled by 6:36pm ET once the game reached "Warmup", recorded as
+    `best_price=None`/`tier="no_market"`). That later snapshot is real
+    and chronologically newer, but it carries no price - if it wins the
+    tie-break outright, a real, bettable price silently vanishes from
+    every stat on the Performance page in favor of a snapshot that was
+    never actually bettable. `_is_more_authoritative` keeps "later wins"
+    as the default, except it never lets a priceless snapshot replace an
+    already-priced one.
     """
     latest: Dict[Tuple[str, str, str, str], PickRecord] = {}
     for p in picks:
         key = p.key + (p.game_date,)
         prev = latest.get(key)
-        if prev is None or p.recorded_at > prev.recorded_at:
+        if prev is None or _is_more_authoritative(p, prev):
+            latest[key] = p
+    return latest
+
+
+def _is_more_authoritative(candidate: PickRecord, current: PickRecord) -> bool:
+    """True if `candidate` should replace `current` as the recorded pick for
+    a given `(player, market, event, game_date)` key. Newer always wins,
+    unless the newer snapshot has no real price while the current one does -
+    see `_latest_pick_per_game`'s docstring for why that specific case must
+    never win on recency alone.
+    """
+    if candidate.recorded_at <= current.recorded_at:
+        return False
+    if candidate.best_price is None and current.best_price is not None:
+        return False
+    return True
+
+
+def last_priced_pick_by_key(picks: List[PickRecord]) -> Dict[Tuple[str, str, str], PickRecord]:
+    """Same "later wins, unless later is unpriced" rule as
+    `_latest_pick_per_game`, but keyed by plain `PickRecord.key` (player,
+    market, event) rather than `_latest_pick_per_game`'s four-tuple - for a
+    single day's picks file (every row already shares one `game_date`, so
+    it doesn't need to be part of the key; same convention as
+    `record_closing_odds`/`latest_pick_per_key` in results.py).
+
+    Built for html_report.py's stale-pregame-price fallback: once a game
+    has started, the live pipeline has no real price left for most of its
+    candidates (books pull props near first pitch - see
+    `_latest_pick_per_game`'s docstring). A person checking the site for
+    the first time after that point should still be able to see the last
+    real price this project actually recorded for that game today, clearly
+    marked as pregame/stale rather than live.
+    """
+    latest: Dict[Tuple[str, str, str], PickRecord] = {}
+    for p in picks:
+        key = p.key
+        prev = latest.get(key)
+        if prev is None or _is_more_authoritative(p, prev):
             latest[key] = p
     return latest
 
