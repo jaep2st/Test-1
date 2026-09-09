@@ -277,6 +277,18 @@ input.view-toggle:checked ~ .table-scroll .secondary-col{ display:table-cell; }
 .reco-more[open] summary{ border-bottom:1px solid var(--border); }
 .reco-disclosure{ font-size:12.5px; color:var(--ink-muted); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin-top:16px; }
 .reco-disclosure b{ color:var(--ink); }
+/* A pick a prior run today recommended that this run no longer does -
+   kept visible (see html_report.py's _withdrawn_section) rather than
+   silently vanishing, with the negative color reserved elsewhere for
+   real warnings (thin-book flags) so it reads as "don't bet this". */
+.withdrawn-list{ background:var(--surface); border:1px solid var(--negative); border-radius:10px; overflow:hidden; }
+.withdrawn-row{ padding:13px 18px; border-bottom:1px solid var(--border); }
+.withdrawn-row:last-child{ border-bottom:none; }
+.withdrawn-row .who{ font-weight:700; font-size:14.5px; }
+.withdrawn-row .who .bet{ font-weight:400; font-size:12.5px; color:var(--ink-muted); margin-left:6px; }
+.withdrawn-row .was{ font-size:12.5px; color:var(--ink-muted); margin-top:3px; }
+.withdrawn-row .reason{ font-size:12.5px; color:var(--negative); font-weight:600; margin-top:3px; }
+.withdrawn-row .when{ font-size:11px; color:var(--ink-muted); margin-top:4px; }
 
 /* --- My Bets: a client-side-only "I took this" toggle (see
    _take_bet_button's docstring in html_report.py for why this never
