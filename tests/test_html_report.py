@@ -400,6 +400,91 @@ def test_html_report_env_cards_show_a_real_game_roster_and_start_time():
     assert "expand-toggle" in html_text
 
 
+def test_html_report_env_card_falls_back_to_stale_pregame_price_once_game_started():
+    # Real ask: running late on a day the game already started, a person
+    # should still be able to see the last real pregame price this project
+    # recorded for it - clearly marked as stale, not live. Mirrors the real
+    # market-closing scenario backtest.py's last_priced_pick_by_key is
+    # built to survive (a book pulling a prop near first pitch).
+    from mlb_props.edges import EdgeCandidate
+    from mlb_props.html_report import _env_card
+    from mlb_props.pipeline import MatchupEnvironment
+    from mlb_props.results import PickRecord
+    from mlb_props.schedule import ProbableMatchup
+
+    matchup = ProbableMatchup(
+        away_team="Team A", home_team="Team B", venue="Test Park",
+        away_pitcher="Pitcher A", home_pitcher="Pitcher B",
+        game_time_utc="2026-08-20T23:10:00Z", status="In Progress",
+    )
+    env = MatchupEnvironment(
+        matchup=matchup, park_hr_factor=100.0, weather_boost_pct=2.0,
+        away_pitcher_vulnerability=None, home_pitcher_vulnerability=None, environment_score=60.0,
+    )
+    # No live price - the market closed once the game started, exactly
+    # like the real Coby Mayo case this fallback exists for.
+    candidate = EdgeCandidate(
+        player="Slugger One", market="batter_home_runs", event="Team A @ Team B", model_score=70.0,
+        model_prob=0.15, market_fair_prob=0.12, best_line=None, ev_percent_model=None, ev_percent_market=None,
+        edge_vs_market=None, price_spread_percent=None, books_quoting=0, park="Test Park", wind_out_mph=0.0,
+        temp_f=70.0, is_dome=False, weather_boost_pct=2.0,
+    )
+    stale_pick = PickRecord(
+        game_date="2026-08-20", recorded_at="2026-08-20T16:00:00+00:00", player="Slugger One",
+        market="batter_home_runs", event="Team A @ Team B", tier="agree", model_score=70.0, model_prob=0.15,
+        bp_model_prob=None, market_fair_prob=0.10, best_price=650, best_book="draftkings",
+        ev_percent_model=25.0, ev_percent_market=15.0, edge_vs_market=0.05, books_quoting=4,
+    )
+    stale_lookup = {stale_pick.key: stale_pick}
+
+    html_text = _env_card(env, 1, [candidate], stale_lookup)
+    assert "+650" in html_text
+    assert "draftkings" in html_text.lower()
+    assert "pregame, stale" in html_text
+    assert "STRONG BET" in html_text
+    assert "verdict-stale" in html_text
+
+
+def test_html_report_env_card_ignores_stale_lookup_while_still_pregame():
+    # A still-pregame game's roster panel must render byte-for-byte the
+    # same whether or not a stale_lookup is passed in - the fallback only
+    # ever applies once a game has actually started.
+    from mlb_props.edges import EdgeCandidate
+    from mlb_props.html_report import _env_card
+    from mlb_props.pipeline import MatchupEnvironment
+    from mlb_props.results import PickRecord
+    from mlb_props.schedule import ProbableMatchup
+
+    matchup = ProbableMatchup(
+        away_team="Team A", home_team="Team B", venue="Test Park",
+        away_pitcher="Pitcher A", home_pitcher="Pitcher B",
+        game_time_utc="2026-08-20T23:10:00Z", status="Pre-Game",
+    )
+    env = MatchupEnvironment(
+        matchup=matchup, park_hr_factor=100.0, weather_boost_pct=2.0,
+        away_pitcher_vulnerability=None, home_pitcher_vulnerability=None, environment_score=60.0,
+    )
+    candidate = EdgeCandidate(
+        player="Slugger One", market="batter_home_runs", event="Team A @ Team B", model_score=70.0,
+        model_prob=0.15, market_fair_prob=0.12, best_line=None, ev_percent_model=None, ev_percent_market=None,
+        edge_vs_market=None, price_spread_percent=None, books_quoting=0, park="Test Park", wind_out_mph=0.0,
+        temp_f=70.0, is_dome=False, weather_boost_pct=2.0,
+    )
+    stale_pick = PickRecord(
+        game_date="2026-08-20", recorded_at="2026-08-20T16:00:00+00:00", player="Slugger One",
+        market="batter_home_runs", event="Team A @ Team B", tier="agree", model_score=70.0, model_prob=0.15,
+        bp_model_prob=None, market_fair_prob=0.10, best_price=650, best_book="draftkings",
+        ev_percent_model=25.0, ev_percent_market=15.0, edge_vs_market=0.05, books_quoting=4,
+    )
+    stale_lookup = {stale_pick.key: stale_pick}
+
+    without_lookup = _env_card(env, 1, [candidate], None)
+    with_lookup = _env_card(env, 1, [candidate], stale_lookup)
+    assert without_lookup == with_lookup
+    assert "NO PRICE YET" in without_lookup
+    assert "pregame, stale" not in without_lookup
+
+
 def test_html_report_recommended_bets_market_fair_is_honestly_na_when_absent():
     from mlb_props.betting import RecommendedBet
     from mlb_props.html_report import _reco_row

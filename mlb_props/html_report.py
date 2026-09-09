@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import html
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from .betting import MIN_EV_PERCENT_TO_RECOMMEND, RecommendedBet, build_recommended_bets
@@ -18,7 +18,9 @@ from .edges import MIN_BOOKS_FOR_MARKET_AGREE, EdgeCandidate
 from .hot_streak import HeatIndex
 from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES, book_display_name
 from .pipeline import MatchupEnvironment, SlateReport
+from .pipeline import _PREGAME_STATUSES
 from .report import clearance_cols, clearance_rates, heat_lookup
+from .results import PickRecord
 from .scoring import HITS_WEIGHTS, HR_WEIGHTS, TB_WEIGHTS
 from .site_style import STYLE as _STYLE
 from .site_style import nav_html
@@ -69,36 +71,83 @@ def _wind_chip(env: MatchupEnvironment) -> str:
 _MARKET_SHORT_LABELS = {MARKET_HOME_RUN: "1+ HR", MARKET_TOTAL_BASES: "2+ TB", MARKET_HITS: "1+ Hits"}
 _VERDICT_RANK = {"STRONG BET": 3, "SPECULATIVE": 2, "PASS": 1, "NO PRICE YET": 0}
 
+# (player, market, event) lowercased - see PickRecord.key - to the last
+# real priced snapshot this project recorded for it today. Built once per
+# render (see mlb_props_main.py) from `backtest.last_priced_pick_by_key`
+# over today's already-recorded picks, and consulted only for a game whose
+# real MLB status is no longer pregame - see `_env_card`'s `game_started`.
+StalePriceLookup = Dict[Tuple[str, str, str], PickRecord]
 
-def _game_roster_html(candidates: List[EdgeCandidate]) -> str:
+
+def _stale_pick_for(c: EdgeCandidate, stale_lookup: Optional[StalePriceLookup]) -> Optional[PickRecord]:
+    """The last real pregame-priced snapshot recorded today for this exact
+    candidate, if the live pipeline has no price for it right now. None in
+    the normal case - live data present, or genuinely nothing to fall back
+    to (see `last_priced_pick_by_key`'s docstring for why this exists)."""
+    if c.has_market_data or not stale_lookup:
+        return None
+    pick = stale_lookup.get((c.player.strip().lower(), c.market.lower(), c.event.lower()))
+    if pick is None or pick.best_price is None or pick.best_book is None:
+        return None
+    return pick
+
+
+def _roster_row_display(c: EdgeCandidate, stale_lookup: Optional[StalePriceLookup]) -> "tuple[str, str, str, bool, Optional[float]]":
+    """(verdict label, verdict css class, price text, is_stale, EV% used
+    for sorting) for one game-roster row. Live data always wins when
+    present, unchanged from before this fallback existed; only a
+    candidate with no live price at all can fall back to a same-day stale
+    snapshot, and only when the caller passed one in (see `_env_card`)."""
+    stale = _stale_pick_for(c, stale_lookup)
+    if stale is not None:
+        label, css_class = _verdict(True, stale.tier, stale.ev_percent_model)
+        price_text = (
+            f"{stale.best_price:+d} {book_display_name(stale.best_book)} "
+            f"· last priced {_fmt_start_time_et(stale.recorded_at)} (pregame, stale)"
+        )
+        return label, f"{css_class} verdict-stale", price_text, True, stale.ev_percent_model
+    label, css_class = _verdict(c.has_market_data, c.tier, c.ev_percent_model)
+    price_text = f"{c.best_line.odds:+d} {book_display_name(c.best_line.sportsbook)}" if c.best_line else "no price yet"
+    return label, css_class, price_text, False, c.ev_percent_model
+
+
+def _game_roster_html(candidates: List[EdgeCandidate], stale_lookup: Optional[StalePriceLookup] = None) -> str:
     """Every real scored candidate for one specific game, across all three
     markets - "click a game, see everything helpful about it," using data
     this project has already computed every run, nothing new fetched.
     Sorted so the best real plays for this game lead: Strong verdicts
     first, then Speculative, then Pass/No price, each group by EV%
     descending within itself.
+
+    `stale_lookup`, when given, lets a candidate with no live price fall
+    back to the last real price this project recorded for it earlier
+    today (see `_roster_row_display`) - used only once a game has started
+    (see `_env_card`), so a still-pregame game's rendering is byte-for-
+    byte unchanged from before this fallback existed.
     """
     if not candidates:
         return '<div class="empty" style="padding:10px 0;">No candidates scored for this game.</div>'
 
     def sort_key(c: EdgeCandidate):
-        label, _cls = _verdict(c.has_market_data, c.tier, c.ev_percent_model)
-        return (_VERDICT_RANK[label], c.ev_percent_model if c.ev_percent_model is not None else -999.0)
+        label, _cls, _price, _is_stale, ev = _roster_row_display(c, stale_lookup)
+        return (_VERDICT_RANK[label], ev if ev is not None else -999.0)
 
     ordered = sorted(candidates, key=sort_key, reverse=True)
     rows = []
     for c in ordered:
-        label, css_class = _verdict(c.has_market_data, c.tier, c.ev_percent_model)
-        price_text = f"{c.best_line.odds:+d} {book_display_name(c.best_line.sportsbook)}" if c.best_line else "no price yet"
+        label, css_class, price_text, is_stale, _ev = _roster_row_display(c, stale_lookup)
+        stale_note = (
+            ' <span class="stale-note">last pregame price &mdash; game already started, not live</span>' if is_stale else ""
+        )
         rows.append(
             f'<div class="game-roster-row"><span class="verdict {css_class}">{_esc(label)}</span>'
             f'<span class="grp"><b>{_esc(c.player)}</b><span class="grm">{_esc(_MARKET_SHORT_LABELS.get(c.market, c.market))}</span></span>'
-            f'<span class="grz num">{_esc(price_text)}</span></div>'
+            f'<span class="grz num">{_esc(price_text)}</span>{stale_note}</div>'
         )
     return "".join(rows)
 
 
-def _env_card(env: MatchupEnvironment, rank: int, candidates: List[EdgeCandidate]) -> str:
+def _env_card(env: MatchupEnvironment, rank: int, candidates: List[EdgeCandidate], stale_lookup: Optional[StalePriceLookup] = None) -> str:
     m = env.matchup
     wind_class = "wind-out" if env.weather_boost_pct > 0 else ("wind-in" if env.weather_boost_pct < 0 else "")
     pitchers = " vs ".join(p for p in (m.away_pitcher, m.home_pitcher) if p) or "Probable pitchers TBA"
@@ -107,6 +156,13 @@ def _env_card(env: MatchupEnvironment, rank: int, candidates: List[EdgeCandidate
     # Progress/Final/etc, see ProbableMatchup's docstring) - already
     # fetched every run, shown here for the first time.
     status_suffix = f" &middot; {_esc(m.status)}" if m.status else ""
+    # Same "unknown status treated as pregame" convention as pipeline.py's
+    # own _filter_lines_to_confirmed_pregame_games, so this and that stay
+    # consistent about what "started" means. Only a started game's roster
+    # panel is given the stale-price fallback - a still-pregame game
+    # renders byte-for-byte as it always has.
+    game_started = bool(m.status) and m.status.strip().lower() not in _PREGAME_STATUSES
+    roster_html = _game_roster_html(candidates, stale_lookup if game_started else None)
     return f"""
       <div class="env-card">
         <div class="rank">#{rank} ENVIRONMENT</div>
@@ -119,7 +175,7 @@ def _env_card(env: MatchupEnvironment, rank: int, candidates: List[EdgeCandidate
           <span class="chip {wind_class}">{env.weather_boost_pct:+.1f}% weather</span>
         </div>
         <span class="expand-toggle" data-role="expand">view this game's props &#9662;</span>
-        <div class="detail-panel game-roster">{_game_roster_html(candidates)}</div>
+        <div class="detail-panel game-roster">{roster_html}</div>
       </div>"""
 
 
@@ -696,6 +752,7 @@ def render_html_report(
     top: int = 15,
     is_mock: bool = False,
     generated_at: Optional[datetime] = None,
+    stale_price_lookup: Optional[StalePriceLookup] = None,
 ) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
     envs = report.matchup_environments
@@ -758,7 +815,12 @@ def render_html_report(
     )
 
     env_cards = "\n".join(
-        _env_card(env, i + 1, candidates_by_event.get(f"{env.matchup.away_team} @ {env.matchup.home_team}", []))
+        _env_card(
+            env,
+            i + 1,
+            candidates_by_event.get(f"{env.matchup.away_team} @ {env.matchup.home_team}", []),
+            stale_price_lookup,
+        )
         for i, env in enumerate(envs[:10])
     )
     hot_rows = "\n".join(_hot_row(i + 1, h) for i, h in enumerate(hot[:10]))

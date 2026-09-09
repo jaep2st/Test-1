@@ -64,7 +64,8 @@ from mlb_props.performance_report import render_performance_report
 from mlb_props.pipeline import run_pipeline
 from mlb_props.pdf_report import render_pdf_report
 from mlb_props.report import render_report
-from mlb_props.results import record_closing_odds, record_picks, resolve_results_for_date
+from mlb_props.backtest import last_priced_pick_by_key
+from mlb_props.results import load_picks, record_closing_odds, record_picks, resolve_results_for_date
 from mlb_props.schedule import MLB_STATS_API_BASE, MlbStatsApiScheduleProvider, MockScheduleProvider, ScheduleProvider
 from mlb_props.statcast import MockStatcastProvider, PybaseballStatcastProvider, StatcastProvider, _find_player_row
 
@@ -858,7 +859,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f.write(text + "\n")
         logger.info("Wrote report to %s", args.out)
     if args.html_out:
-        html_text = render_html_report(report, top=args.top, is_mock=args.mock)
+        # Today's picks already recorded by an earlier run (this run's own
+        # candidates haven't been recorded yet - record_picks runs after
+        # this, below) - the last real priced snapshot per (player,
+        # market, event) becomes html_report.py's stale-pregame-price
+        # fallback for any game that's already started by now, so someone
+        # checking the site late can still see the last real price this
+        # project saw for it. Empty on the day's first run or in --mock
+        # mode (no file to load yet) - render_html_report treats that the
+        # same as always: no fallback, unchanged rendering.
+        todays_picks_path = os.path.join(args.data_dir, "picks", f"{args.game_date.isoformat()}.jsonl")
+        stale_price_lookup = last_priced_pick_by_key(load_picks(todays_picks_path))
+        html_text = render_html_report(report, top=args.top, is_mock=args.mock, stale_price_lookup=stale_price_lookup)
         with open(args.html_out, "w") as f:
             f.write(html_text)
         logger.info("Wrote HTML report to %s", args.html_out)
