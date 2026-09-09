@@ -294,7 +294,7 @@ def test_units_ledger_reads_tier_through_effective_tier_not_the_raw_field():
 
     assert len(ledger) == 1
     assert ledger[0].tier == "model_only"  # corrected, not the raw "agree"
-    assert ledger[0].units == 1.5  # speculative (1/8-Kelly) sizing, not 2.5 (quarter-Kelly)
+    assert ledger[0].units == 0.5  # speculative (1/16-Kelly) sizing, not 2.5 (quarter-Kelly)
 
 
 def test_units_ledger_excludes_a_pick_with_no_real_price():
@@ -317,10 +317,10 @@ def test_units_summary_splits_strong_vs_speculative_and_computes_roi():
     assert summary.strong_n_bets == 1
     assert summary.strong_net_units == 5.0
     assert summary.speculative_n_bets == 1
-    assert summary.speculative_net_units == -1.0
-    assert summary.net_units == 4.0
-    assert summary.total_units_staked == 3.5  # 2.5 + 1.0
-    assert summary.roi_percent == round(4.0 / 3.5 * 100.0, 1)
+    assert summary.speculative_net_units == -0.5
+    assert summary.net_units == 4.5
+    assert summary.total_units_staked == 3.0  # 2.5 + 0.5
+    assert summary.roi_percent == round(4.5 / 3.0 * 100.0, 1)
 
 
 def test_units_summary_on_no_real_bets_returns_zeros_not_none_crash():

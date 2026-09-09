@@ -46,17 +46,37 @@ def _lerp3(score: float, at0: float, at50: float, at100: float) -> float:
 # (weight, normalization range) for each HR-relevant component. Ranges are
 # realistic full-season MLB bounds for qualified hitters/pitchers.
 HR_WEIGHTS: Dict[str, float] = {
-    "barrel_pct": 0.18,
-    "hard_hit_pct": 0.13,
-    "avg_exit_velo": 0.08,
-    "hr_fb_pct": 0.12,
-    "pull_air_pct": 0.06,
-    "platoon_edge": 0.10,
-    "pitcher_allowed": 0.12,
-    "pitch_mix_edge": 0.05,
-    "park_factor": 0.06,
-    "weather_boost": 0.08,
-    "hot_streak": 0.02,
+    "barrel_pct": 0.1915,
+    "hard_hit_pct": 0.1383,
+    "avg_exit_velo": 0.0851,
+    "hr_fb_pct": 0.1277,
+    # Zeroed, not deleted: real, live runs, `pull_air_pct` is permanently
+    # 0.0 for every batter (see statcast.py's BatterProfile.pull_air_pct
+    # docstring and the html_report.py data-quality note this project has
+    # disclosed since it shipped) - neither Baseball Savant leaderboard
+    # this project pulls carries a pull-rate column, and FanGraphs (which
+    # does) returns 403 from this hosting provider. A weight on a
+    # component that's structurally guaranteed to contribute 0 every time
+    # isn't neutral - it dilutes the HR score by up to 6 points versus
+    # giving that weight to a component that actually carries signal.
+    # Confirmed via mlb_props/refit.py's real weight fit (2026-09-09, 429
+    # real training rows): the fitted logistic regression independently
+    # assigned this component 0.0 importance too. Kept in the dict (not
+    # removed) so `components["pull_air_pct"]` still exists for anyone
+    # inspecting the breakdown, and so refit.py's MARKET_COMPONENT_KEYS
+    # stays valid against old recorded PickRecord.components rows. The
+    # freed 6% is redistributed proportionally across the other real
+    # components below - a mechanical fix, not a refit of the model's
+    # judgment about which of those components matters most (see
+    # refit.py's REFIT_READY_DAYS for why this project isn't ready to
+    # trust that judgment yet).
+    "pull_air_pct": 0.0,
+    "platoon_edge": 0.1064,
+    "pitcher_allowed": 0.1277,
+    "pitch_mix_edge": 0.0532,
+    "park_factor": 0.0638,
+    "weather_boost": 0.0851,
+    "hot_streak": 0.0212,
 }
 assert abs(sum(HR_WEIGHTS.values()) - 1.0) < 1e-9
 

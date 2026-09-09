@@ -132,6 +132,54 @@ def test_units_record_excludes_a_stale_agree_tier_from_strong_sizing(tmp_path):
     assert "+5.0u" not in html
 
 
+def test_speculative_warning_shows_once_a_real_negative_sample_is_large_enough():
+    # Real finding (2026-09-09): once enough Speculative bets have
+    # resolved to say something real (reusing refit.MIN_PICKS_TO_FIT's own
+    # bar), a net-negative segment gets a visible warning, not just a
+    # quieter number in the breakdown table.
+    from mlb_props.backtest import DailyUnits, UnitsSummary
+    from mlb_props.performance_report import _units_section
+    from mlb_props.refit import MIN_PICKS_TO_FIT
+
+    summary = UnitsSummary(
+        n_bets=MIN_PICKS_TO_FIT + 10, total_units_staked=100.0, net_units=-11.0, roi_percent=-11.0,
+        strong_n_bets=0, strong_net_units=0.0,
+        speculative_n_bets=MIN_PICKS_TO_FIT + 10, speculative_net_units=-11.0,
+    )
+    html = _units_section(summary, [DailyUnits(game_date="2026-08-20", net_units=-11.0, cumulative_units=-11.0)])
+    assert "warn-note" in html
+    assert "Speculative bets have net lost 11.0u" in html
+    assert str(MIN_PICKS_TO_FIT + 10) in html
+
+
+def test_speculative_warning_hidden_below_the_real_sample_floor():
+    from mlb_props.backtest import DailyUnits, UnitsSummary
+    from mlb_props.performance_report import _units_section
+    from mlb_props.refit import MIN_PICKS_TO_FIT
+
+    summary = UnitsSummary(
+        n_bets=MIN_PICKS_TO_FIT - 1, total_units_staked=20.0, net_units=-5.0, roi_percent=-25.0,
+        strong_n_bets=0, strong_net_units=0.0,
+        speculative_n_bets=MIN_PICKS_TO_FIT - 1, speculative_net_units=-5.0,
+    )
+    html = _units_section(summary, [DailyUnits(game_date="2026-08-20", net_units=-5.0, cumulative_units=-5.0)])
+    assert "warn-note" not in html
+
+
+def test_speculative_warning_hidden_once_the_segment_is_net_positive():
+    from mlb_props.backtest import DailyUnits, UnitsSummary
+    from mlb_props.performance_report import _units_section
+    from mlb_props.refit import MIN_PICKS_TO_FIT
+
+    summary = UnitsSummary(
+        n_bets=MIN_PICKS_TO_FIT + 10, total_units_staked=100.0, net_units=6.0, roi_percent=6.0,
+        strong_n_bets=0, strong_net_units=0.0,
+        speculative_n_bets=MIN_PICKS_TO_FIT + 10, speculative_net_units=6.0,
+    )
+    html = _units_section(summary, [DailyUnits(game_date="2026-08-20", net_units=6.0, cumulative_units=6.0)])
+    assert "warn-note" not in html
+
+
 def test_renders_real_numbers_from_populated_data(tmp_path):
     os.makedirs(tmp_path / "picks")
     os.makedirs(tmp_path / "results")

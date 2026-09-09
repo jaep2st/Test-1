@@ -117,6 +117,27 @@ def _units_section(summary: UnitsSummary, daily: List[DailyUnits]) -> str:
             ("Speculative (model only)", summary.speculative_n_bets, summary.speculative_net_units),
         )
     )
+    # A real, computed-live warning (not a one-time hardcoded note) - once
+    # enough Speculative bets have resolved to say something real
+    # (reusing refit.MIN_PICKS_TO_FIT's own "real sample" floor) and that
+    # segment is net negative, say so plainly right next to the number,
+    # not just as a quieter row in the table above. Confirmed 2026-09-09:
+    # over the first 112 real Speculative bets, realized win rate (30.4%)
+    # was BELOW what the market's own no-vig-ignoring price required to
+    # break even (35.9%) - this isn't "less edge than Strong," it's zero
+    # validated edge so far. See betting.SPECULATIVE_KELLY_MULTIPLIER,
+    # sized down in response. Silent (no claim either way) once the
+    # sample is too small to say anything real, or once it turns
+    # positive - never a stale "still bad" note once that's no longer true.
+    speculative_warning = ""
+    if summary.speculative_n_bets >= MIN_PICKS_TO_FIT and summary.speculative_net_units < 0:
+        speculative_warning = f"""
+    <div class="warn-note">
+      <b>Speculative bets have net lost {abs(summary.speculative_net_units):.1f}u over the {summary.speculative_n_bets} real ones resolved so far</b> -
+      real evidence this segment (model-only, no market corroboration) hasn't shown a validated edge yet, not just a smaller one than Strong.
+      Sized more conservatively as a result (see the Recommended Bets page). Still shown and tracked, never hidden - if that changes with more
+      real data, this note goes away on its own.
+    </div>"""
     daily_rows = "".join(
         f'<tr><td class="num">{_esc(d.game_date)}</td>'
         f'<td class="num {"pos" if d.net_units >= 0 else "neg"}">{_fmt_units(d.net_units)}</td>'
@@ -150,6 +171,7 @@ def _units_section(summary: UnitsSummary, daily: List[DailyUnits]) -> str:
         </table>
       </div>
     </div>
+    {speculative_warning}
   </section>"""
 
 
