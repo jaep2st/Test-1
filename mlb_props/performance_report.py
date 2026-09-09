@@ -19,10 +19,12 @@ from typing import List, Optional
 from .backtest import (
     CalibrationBucket,
     DailyUnits,
+    EdgeConfidence,
     HitRateGroup,
     UnitsSummary,
     calibration_buckets,
     clv_summary,
+    edge_confidence,
     hit_rate_by_lineup_source,
     hit_rate_by_market,
     hit_rate_by_run_hour,
@@ -172,6 +174,54 @@ def _units_section(summary: UnitsSummary, daily: List[DailyUnits]) -> str:
       </div>
     </div>
     {speculative_warning}
+  </section>"""
+
+
+def _edge_confidence_section(confidences: List[EdgeConfidence]) -> str:
+    """The honest answer to "is this actually working yet" - not just up
+    or down (see `_units_section` above), but whether that number has
+    resolved enough real bets to mean anything. A 95% CI that still
+    contains 0 says exactly that in plain language: real edge, real lack
+    of edge, and pure noise around zero all currently look the same at
+    this sample size - patience, not bigger bets, is what actually
+    resolves it (see backtest.edge_confidence's docstring).
+    """
+    if all(c.n_bets < 2 for c in confidences):
+        return ""
+
+    def verdict_html(c: EdgeConfidence) -> str:
+        if c.n_bets < 2:
+            return '<span class="verdict verdict-none">NOT ENOUGH DATA</span>'
+        if c.significant is True:
+            return '<span class="verdict verdict-strong">REAL EDGE (95% confidence)</span>'
+        if c.significant is False:
+            return '<span class="verdict verdict-pass">REAL NEGATIVE EDGE (95% confidence)</span>'
+        return '<span class="verdict verdict-speculative">NOT PROVEN YET</span>'
+
+    rows = "".join(
+        f"""
+        <div class="edge-conf-row">
+          <div class="who">{_esc(c.tier_label)}</div>
+          {verdict_html(c)}
+          <div class="sub">{c.n_bets} real bets &middot; {c.mean_net_units_per_bet:+.3f}u/bet average &middot;
+            95% CI [{c.ci_lo_95:+.3f}u, {c.ci_hi_95:+.3f}u]</div>
+        </div>"""
+        for c in confidences
+    )
+    return f"""
+  <section class="section">
+    <div class="section-head">
+      <h2>Is there a real edge yet?</h2>
+      <span class="hint">Whether each tier's real per-bet average is statistically distinguishable from zero, not just which way it's currently pointing</span>
+    </div>
+    <div class="edge-conf-list">{rows}</div>
+    <div class="reco-disclosure">
+      A tier's 95% confidence interval still containing 0u/bet means exactly that: at this sample size, a real
+      positive edge, a real negative edge, and pure noise around zero would all look about like what's shown here.
+      That's not a flaw in the math - it's an honest report of how much real data exists so far. The interval
+      narrows as more real bets resolve; the fix for "not proven yet" is more real days, never bigger bets on an
+      edge that hasn't actually been shown to be real.
+    </div>
   </section>"""
 
 
@@ -522,6 +572,7 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
     units_ledger_rows = units_ledger(resolved)
     units = units_summary(units_ledger_rows)
     daily_units = units_by_date(units_ledger_rows)
+    confidences = edge_confidence(units_ledger_rows)
 
     buckets = calibration_buckets(resolved)
     clv = clv_summary(clv_records)
@@ -664,6 +715,8 @@ def render_performance_report(data_dir: str, generated_at: Optional[datetime] = 
   </section>
 
   {_units_section(units, daily_units)}
+
+  {_edge_confidence_section(confidences)}
 
   <section class="section">
     <div class="section-head">

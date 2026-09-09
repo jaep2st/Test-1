@@ -7,6 +7,7 @@ the JSONL round-trip itself is covered in test_results.py.
 from mlb_props.backtest import (
     calibration_buckets,
     clv_summary,
+    edge_confidence,
     hit_rate_by_lineup_source,
     hit_rate_by_market,
     hit_rate_by_run_hour,
@@ -375,3 +376,83 @@ def test_last_priced_pick_by_key_keys_by_player_market_event_not_game_date():
     picks = [_pick("Player A", best_price=650, market="batter_home_runs")]
     latest = last_priced_pick_by_key(picks)
     assert set(latest.keys()) == {("player a", "batter_home_runs", "team a @ team b")}
+
+
+# --- edge_confidence: is a tier's real per-bet edge statistically
+# distinguishable from zero yet, or still indistinguishable from noise. ---
+
+
+def _strong_ledger(n, won):
+    # model_prob=0.40 @ +200 "agree" always sizes to 2.5u (quarter-Kelly)
+    # and pays 5.0u on a win / -2.5u on a loss - identical every time, so
+    # a run of all-wins or all-losses gives a perfectly tight (zero-
+    # variance) confidence interval, the clearest possible test case.
+    picks = [
+        _pick(f"Player {i}", model_prob=0.40, best_price=200, tier="agree", books_quoting=4, game_date="2026-08-20")
+        for i in range(n)
+    ]
+    results = [_outcome(f"Player {i}", got_hr=won, game_date="2026-08-20") for i in range(n)]
+    return units_ledger(resolve_picks(picks, results))
+
+
+def test_edge_confidence_reports_not_enough_data_below_two_bets():
+    strong, speculative = edge_confidence(_strong_ledger(1, True))
+    assert strong.n_bets == 1
+    assert strong.significant is None
+    assert speculative.n_bets == 0
+    assert speculative.significant is None
+
+
+def test_edge_confidence_flags_a_real_positive_edge_when_the_ci_excludes_zero():
+    ledger = _strong_ledger(20, True)  # 20 identical wins - zero variance, CI = [5.0, 5.0]
+    strong, speculative = edge_confidence(ledger)
+    assert strong.tier_label == "Strong (agree)"
+    assert strong.n_bets == 20
+    assert strong.significant is True
+    assert strong.ci_lo_95 > 0
+
+
+def test_edge_confidence_flags_a_real_negative_edge_when_the_ci_excludes_zero():
+    ledger = _strong_ledger(20, False)  # 20 identical losses - zero variance, CI = [-2.5, -2.5]
+    strong, speculative = edge_confidence(ledger)
+    assert strong.significant is False
+    assert strong.ci_hi_95 < 0
+
+
+def test_edge_confidence_says_not_proven_yet_when_the_ci_still_contains_zero():
+    # A real mix of wins and losses at a small sample - real variance,
+    # nowhere near enough data to say anything with 95% confidence.
+    picks = [
+        _pick(f"Player {i}", model_prob=0.40, best_price=200, tier="agree", books_quoting=4, game_date="2026-08-20")
+        for i in range(4)
+    ]
+    results = [
+        _outcome("Player 0", got_hr=True, game_date="2026-08-20"),
+        _outcome("Player 1", got_hr=False, game_date="2026-08-20"),
+        _outcome("Player 2", got_hr=True, game_date="2026-08-20"),
+        _outcome("Player 3", got_hr=False, game_date="2026-08-20"),
+    ]
+    ledger = units_ledger(resolve_picks(picks, results))
+    strong, speculative = edge_confidence(ledger)
+    assert strong.n_bets == 4
+    assert strong.significant is None
+    assert strong.ci_lo_95 < 0 < strong.ci_hi_95
+
+
+def test_edge_confidence_splits_strong_and_speculative_independently():
+    strong_picks = [
+        _pick("Player S1", model_prob=0.40, best_price=200, tier="agree", books_quoting=4, game_date="2026-08-20"),
+    ]
+    speculative_picks = [
+        _pick("Player M1", model_prob=0.40, best_price=200, tier="model_only", books_quoting=4, game_date="2026-08-20"),
+    ]
+    results = [
+        _outcome("Player S1", got_hr=True, game_date="2026-08-20"),
+        _outcome("Player M1", got_hr=False, game_date="2026-08-20"),
+    ]
+    ledger = units_ledger(resolve_picks(strong_picks + speculative_picks, results))
+    strong, speculative = edge_confidence(ledger)
+    assert strong.n_bets == 1
+    assert speculative.n_bets == 1
+    assert strong.mean_net_units_per_bet > 0
+    assert speculative.mean_net_units_per_bet < 0
