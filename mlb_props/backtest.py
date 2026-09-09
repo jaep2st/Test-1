@@ -13,6 +13,7 @@ hides it. See `performance_report.py` for how this gets rendered.
 from __future__ import annotations
 
 import glob
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -428,4 +429,71 @@ def units_by_date(ledger: List[UnitsRecord]) -> List[DailyUnits]:
     for game_date in sorted(by_date):
         running += by_date[game_date]
         out.append(DailyUnits(game_date=game_date, net_units=round(by_date[game_date], 2), cumulative_units=round(running, 2)))
+    return out
+
+
+_STRONG_LABEL = "Strong (agree)"
+_SPECULATIVE_LABEL = "Speculative (model only)"
+
+
+@dataclass(frozen=True)
+class EdgeConfidence:
+    """Whether a tier's real per-bet edge (net_units per bet) is
+    statistically distinguishable from zero *yet*, given how many real
+    bets have actually resolved - a different, more careful question than
+    `units_summary`'s plain "up or down". A small real sample can show a
+    big-looking net_units number that's still well within noise; this is
+    the honest read on whether that number has actually earned trust.
+
+    Uses a plain normal-approximation 95% CI on the mean net units per
+    bet (no numpy/scipy - same zero-dependency, pure-Python convention as
+    refit.py's own hand-rolled logistic fit). Not exact for a very small
+    n, but real and honest, never a fabricated precision.
+    """
+
+    tier_label: str
+    n_bets: int
+    mean_net_units_per_bet: float
+    ci_lo_95: float
+    ci_hi_95: float
+    # True only if the entire 95% CI sits above 0 (a real, statistically
+    # distinguishable positive edge); False only if it sits entirely
+    # below 0 (a real, statistically distinguishable negative edge); None
+    # if 0 is still inside the interval - "not enough data to say yet,"
+    # never a forced yes/no this sample can't actually support.
+    significant: Optional[bool]
+
+
+def edge_confidence(ledger: List[UnitsRecord]) -> List[EdgeConfidence]:
+    """Same tier split as `units_summary` (Strong == effective "agree",
+    Speculative == everything else that cleared the real bet bar), but
+    for the question "is this tier's real edge proven yet" instead of
+    "up or down". Always returns both tiers, even with zero or one real
+    bet resolved so far - `significant` is simply `None` (unknown, not
+    "no edge") until there's enough real data to say anything at all.
+    """
+    groups: Dict[str, List[float]] = {_STRONG_LABEL: [], _SPECULATIVE_LABEL: []}
+    for r in ledger:
+        groups[_STRONG_LABEL if r.tier == "agree" else _SPECULATIVE_LABEL].append(r.net_units)
+
+    out = []
+    for label in (_STRONG_LABEL, _SPECULATIVE_LABEL):
+        values = groups[label]
+        n = len(values)
+        if n == 0:
+            out.append(EdgeConfidence(label, n, 0.0, 0.0, 0.0, None))
+            continue
+        mean = sum(values) / n
+        if n < 2:
+            # A real mean is well-defined at n=1; a variance/CI isn't -
+            # report the mean honestly, leave the interval at that same
+            # point (zero-width, not a claim of confidence) and the
+            # verdict at None.
+            out.append(EdgeConfidence(label, n, round(mean, 4), round(mean, 4), round(mean, 4), None))
+            continue
+        variance = sum((v - mean) ** 2 for v in values) / (n - 1)
+        stderr = math.sqrt(variance / n)
+        ci_lo, ci_hi = mean - 1.96 * stderr, mean + 1.96 * stderr
+        significant = True if ci_lo > 0 else (False if ci_hi < 0 else None)
+        out.append(EdgeConfidence(label, n, round(mean, 4), round(ci_lo, 4), round(ci_hi, 4), significant))
     return out

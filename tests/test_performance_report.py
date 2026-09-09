@@ -317,3 +317,40 @@ def test_escapes_malicious_player_name_in_pick_log(tmp_path):
     html = render_performance_report(str(tmp_path))
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+def test_edge_confidence_section_hidden_with_no_real_bets_yet():
+    from mlb_props.backtest import EdgeConfidence
+    from mlb_props.performance_report import _edge_confidence_section
+
+    confidences = [
+        EdgeConfidence("Strong (agree)", 0, 0.0, 0.0, 0.0, None),
+        EdgeConfidence("Speculative (model only)", 0, 0.0, 0.0, 0.0, None),
+    ]
+    assert _edge_confidence_section(confidences) == ""
+
+
+def test_edge_confidence_section_shows_a_real_positive_edge():
+    from mlb_props.backtest import EdgeConfidence
+    from mlb_props.performance_report import _edge_confidence_section
+
+    confidences = [
+        EdgeConfidence("Strong (agree)", 40, 1.5, 0.3, 2.7, True),
+        EdgeConfidence("Speculative (model only)", 0, 0.0, 0.0, 0.0, None),
+    ]
+    html = _edge_confidence_section(confidences)
+    assert "REAL EDGE (95% confidence)" in html
+    assert "NOT ENOUGH DATA" in html
+    assert "40 real bets" in html
+
+
+def test_edge_confidence_section_says_not_proven_yet_when_ci_spans_zero():
+    from mlb_props.backtest import EdgeConfidence
+    from mlb_props.performance_report import _edge_confidence_section
+
+    confidences = [
+        EdgeConfidence("Strong (agree)", 20, 0.1, -0.4, 0.6, None),
+        EdgeConfidence("Speculative (model only)", 0, 0.0, 0.0, 0.0, None),
+    ]
+    html = _edge_confidence_section(confidences)
+    assert "NOT PROVEN YET" in html

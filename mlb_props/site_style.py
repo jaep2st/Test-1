@@ -152,6 +152,12 @@ table.props td.event{ color:var(--ink-muted); font-size:12.5px; white-space:norm
    performance_report.py's _units_section speculative_warning. */
 .warn-note{ margin-top:16px; font-size:12.5px; color:var(--ink); background:var(--negative-tint); border:1px solid var(--negative); border-radius:8px; padding:12px 16px; }
 .warn-note b{ color:var(--negative); }
+/* "Is there a real edge yet?" section - see performance_report.py's
+   _edge_confidence_section. */
+.edge-conf-list{ display:flex; flex-direction:column; gap:10px; }
+.edge-conf-row{ display:flex; flex-wrap:wrap; align-items:center; gap:12px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 16px; }
+.edge-conf-row .who{ font-weight:700; font-size:14px; min-width:200px; }
+.edge-conf-row .sub{ flex-basis:100%; font-size:12px; color:var(--ink-muted); }
 .weight-row{ display:flex; align-items:center; gap:10px; font-size:13px; padding:4px 0; }
 .weight-row .wname{ width:150px; color:var(--ink-muted); flex:none; }
 .weight-bar{ flex:1; height:6px; border-radius:4px; background:var(--surface-2); overflow:hidden; }
