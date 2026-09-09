@@ -148,6 +148,10 @@ table.props td.event{ color:var(--ink-muted); font-size:12.5px; white-space:norm
 @media (max-width:760px){ .method-grid{ grid-template-columns:1fr; } }
 .method-card{ background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 20px; box-shadow:var(--shadow); }
 .method-card h3{ font-size:16px; font-weight:700; margin-bottom:10px; }
+/* A real, computed-live finding worth more than a quiet table row - see
+   performance_report.py's _units_section speculative_warning. */
+.warn-note{ margin-top:16px; font-size:12.5px; color:var(--ink); background:var(--negative-tint); border:1px solid var(--negative); border-radius:8px; padding:12px 16px; }
+.warn-note b{ color:var(--negative); }
 .weight-row{ display:flex; align-items:center; gap:10px; font-size:13px; padding:4px 0; }
 .weight-row .wname{ width:150px; color:var(--ink-muted); flex:none; }
 .weight-bar{ flex:1; height:6px; border-radius:4px; background:var(--surface-2); overflow:hidden; }

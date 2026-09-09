@@ -135,6 +135,34 @@ def test_score_components_sum_to_the_overall_score():
     assert round(recomputed, 1) == result.score
 
 
+def test_hr_score_no_longer_moves_with_pull_air_pct():
+    # Confirmed 2026-09-09: pull_air_pct is permanently 0.0 for every real
+    # batter in live runs (statcast.py's own disclosed data-quality gap -
+    # neither Baseball Savant leaderboard this project pulls carries a
+    # pull-rate column, and FanGraphs, which does, 403s this hosting
+    # provider). A weight on a component that can never carry real signal
+    # in production isn't neutral - it was diluting every HR score by up
+    # to 6 points versus giving that weight to a component that actually
+    # varies. HR_WEIGHTS now zeroes it out - varying pull_air_pct alone
+    # must no longer move the score at all, even though the raw component
+    # is still computed and shown (never silently deleted from the
+    # breakdown - see scoring.py's HR_WEIGHTS comment).
+    from dataclasses import replace
+
+    park = MockParkWeatherProvider(seed=4).get_context("Coors Field")
+    heat = MockHotStreakProvider(seed=4).get_heat_index("Elite Slugger")
+    matchup = MockMatchupProvider(seed=4).get_matchup("Elite Slugger", "R", "Gopher Ball Guy", "R", {})
+
+    low_pull = replace(_elite_batter(), pull_air_pct=12.0)
+    high_pull = replace(_elite_batter(), pull_air_pct=48.0)
+    low_result = compute_hr_score(low_pull, _bad_pitcher(), matchup, park, heat)
+    high_result = compute_hr_score(high_pull, _bad_pitcher(), matchup, park, heat)
+
+    assert low_result.score == high_result.score
+    # Still computed and present in the breakdown, just weightless.
+    assert low_result.components["pull_air_pct"] != high_result.components["pull_air_pct"]
+
+
 def test_hits_score_favors_higher_contact_quality_and_better_matchup():
     park = MockParkWeatherProvider(seed=5).get_context("Yankee Stadium")
     heat = MockHotStreakProvider(seed=5).get_heat_index("Elite Slugger")

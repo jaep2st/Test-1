@@ -22,10 +22,18 @@ choices on top of that:
    early number this way missed a much better price a second book posted
    shortly after. A "speculative" pick (model_only/
    model_only_single_sided - only this project's own heuristic sees it,
-   with no market corroboration) is sized at an extra half of that
-   (0.125x, effectively 1/8-Kelly) - Kelly math assumes model_prob IS the
-   true probability, and there's real, disclosed reason to trust that
-   assumption less when nothing else confirms it.
+   with no market corroboration) is sized at 1/16-Kelly (0.0625x) - Kelly
+   math assumes model_prob IS the true probability, and there's real,
+   disclosed reason to trust that assumption less when nothing else
+   confirms it. Confirmed against this project's own real recorded
+   history (2026-09-09, 112 real resolved Speculative bets): realized win
+   rate (30.4%) came in BELOW what the market's own price required just
+   to break even (35.9%), net -11.4u - not "less edge than Strong," zero
+   validated edge so far. This tier was sized at 1/8-Kelly until that
+   real evidence came in; halved again in response (see
+   backtest.hit_rate_by_tier / units_summary for the numbers this is
+   based on, and performance_report.py's speculative_warning for where a
+   live version of this same check is surfaced).
 2. A hard floor and cap (MIN_UNITS/MAX_UNITS below) regardless of what
    the raw Kelly math says, so one overconfident model_prob can't
    recommend an outsized position, and a marginal-but-real edge doesn't
@@ -51,7 +59,7 @@ from .results import PickRecord
 # Real bet-sizing constants, every one deliberately conservative - see
 # module docstring for why each exists.
 STRONG_KELLY_MULTIPLIER = 0.25  # quarter-Kelly for tier == "agree"
-SPECULATIVE_KELLY_MULTIPLIER = 0.125  # 1/8-Kelly for model-only tiers - see docstring point 1
+SPECULATIVE_KELLY_MULTIPLIER = 0.0625  # 1/16-Kelly for model-only tiers - see docstring point 1 (real data, 2026-09-09: this tier realized below the market's own breakeven)
 MIN_EV_PERCENT_TO_RECOMMEND = 3.0  # below this, "edge" is noise-level against a hand-tuned heuristic, not a real recommendation
 MIN_UNITS = 0.5  # smallest recommended size once a pick clears the bar - anything smaller isn't worth a distinct position
 MAX_UNITS = 3.0  # hard cap regardless of what Kelly says - protects against a single overconfident model_prob
