@@ -145,6 +145,7 @@ def test_speculative_warning_shows_once_a_real_negative_sample_is_large_enough()
         n_bets=MIN_PICKS_TO_FIT + 10, total_units_staked=100.0, net_units=-11.0, roi_percent=-11.0,
         strong_n_bets=0, strong_net_units=0.0,
         speculative_n_bets=MIN_PICKS_TO_FIT + 10, speculative_net_units=-11.0,
+        best_bets_n_bets=0, best_bets_net_units=0.0,
     )
     html = _units_section(summary, [DailyUnits(game_date="2026-08-20", net_units=-11.0, cumulative_units=-11.0)])
     assert "warn-note" in html
@@ -161,6 +162,7 @@ def test_speculative_warning_hidden_below_the_real_sample_floor():
         n_bets=MIN_PICKS_TO_FIT - 1, total_units_staked=20.0, net_units=-5.0, roi_percent=-25.0,
         strong_n_bets=0, strong_net_units=0.0,
         speculative_n_bets=MIN_PICKS_TO_FIT - 1, speculative_net_units=-5.0,
+        best_bets_n_bets=0, best_bets_net_units=0.0,
     )
     html = _units_section(summary, [DailyUnits(game_date="2026-08-20", net_units=-5.0, cumulative_units=-5.0)])
     assert "warn-note" not in html
@@ -175,9 +177,25 @@ def test_speculative_warning_hidden_once_the_segment_is_net_positive():
         n_bets=MIN_PICKS_TO_FIT + 10, total_units_staked=100.0, net_units=6.0, roi_percent=6.0,
         strong_n_bets=0, strong_net_units=0.0,
         speculative_n_bets=MIN_PICKS_TO_FIT + 10, speculative_net_units=6.0,
+        best_bets_n_bets=0, best_bets_net_units=0.0,
     )
     html = _units_section(summary, [DailyUnits(game_date="2026-08-20", net_units=6.0, cumulative_units=6.0)])
     assert "warn-note" not in html
+
+
+def test_units_section_shows_best_bets_as_a_row_within_the_strong_breakdown():
+    from mlb_props.backtest import DailyUnits, UnitsSummary
+    from mlb_props.performance_report import _units_section
+
+    summary = UnitsSummary(
+        n_bets=10, total_units_staked=25.0, net_units=8.0, roi_percent=32.0,
+        strong_n_bets=10, strong_net_units=8.0,
+        speculative_n_bets=0, speculative_net_units=0.0,
+        best_bets_n_bets=4, best_bets_net_units=6.0,
+    )
+    html = _units_section(summary, [DailyUnits(game_date="2026-08-20", net_units=8.0, cumulative_units=8.0)])
+    assert "Best Bets" in html
+    assert "+6.0u" in html
 
 
 def test_renders_real_numbers_from_populated_data(tmp_path):

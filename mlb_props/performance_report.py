@@ -116,6 +116,11 @@ def _units_section(summary: UnitsSummary, daily: List[DailyUnits]) -> str:
         f"<tr><td>{label}</td><td class=\"num\">{n}</td><td class=\"num {'pos' if net >= 0 else 'neg'}\">{_fmt_units(net)}</td></tr>"
         for label, n, net in (
             ("Strong (model + market agree)", summary.strong_n_bets, summary.strong_net_units),
+            (
+                "&nbsp;&nbsp;&#8618; Best Bets (tightest slice of Strong)",
+                summary.best_bets_n_bets,
+                summary.best_bets_net_units,
+            ),
             ("Speculative (model only)", summary.speculative_n_bets, summary.speculative_net_units),
         )
     )
@@ -151,7 +156,7 @@ def _units_section(summary: UnitsSummary, daily: List[DailyUnits]) -> str:
   <section class="section">
     <div class="section-head">
       <h2>Units record</h2>
-      <span class="hint">Real profit/loss in units (1 unit = 1% of bankroll) on every pick that would have cleared the real bet bar</span>
+      <span class="hint">Real profit/loss in units (1 unit = 1% of bankroll) on every pick that would have cleared the real bet bar - Best Bets is a subset of Strong, already counted once there, shown separately to see whether the tighter list actually grinds steadier</span>
     </div>
     <div class="method-grid">
       <div class="method-card">

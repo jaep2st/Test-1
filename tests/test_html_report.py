@@ -568,6 +568,44 @@ def test_recommended_bets_section_omits_the_withdrawn_block_when_nothing_withdra
     assert "No longer recommended" not in html_text_default
 
 
+def test_recommended_bets_section_shows_best_bets_first_and_collapses_full_lists():
+    # Real ask (2026-09): too many recommended bets made day-to-day units
+    # swing hard - Best Bets is the tightest, highest-conviction slice
+    # (see betting.best_bets) and must render first, unmissed, while the
+    # full Strong + Speculative lists stay available but collapsed below.
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _recommended_bets_section
+
+    def _bet(player, ev):
+        return RecommendedBet(
+            player=player, market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+            tier="agree", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=ev,
+            best_price=200, best_book="draftkings", books_quoting=2, units=1.0, full_kelly_percent=4.0, breakeven=400,
+        )
+
+    strong = [_bet("Player High", 20.0), _bet("Player Low", 4.0)]
+    html_text = _recommended_bets_section(strong, [], "2026-08-20")
+
+    assert "Best Bets (1)" in html_text  # only Player High clears BEST_BETS_MIN_EV_PERCENT (8.0)
+    assert 'class="reco-full-lists"' in html_text
+    assert "Show the full Strong + Speculative lists (2 + 0)" in html_text
+    # Best Bets renders before the collapsed full-lists block.
+    assert html_text.index("Best Bets (1)") < html_text.index('class="reco-full-lists"')
+
+
+def test_recommended_bets_section_best_bets_empty_when_nothing_clears_the_floor():
+    from mlb_props.betting import RecommendedBet
+    from mlb_props.html_report import _recommended_bets_section
+
+    weak = RecommendedBet(
+        player="Player Weak", market="batter_home_runs", market_label="1+ HR", event="Team A @ Team B",
+        tier="agree", model_prob=0.20, market_fair_prob=0.15, edge_vs_market=0.05, ev_percent_model=4.0,
+        best_price=200, best_book="draftkings", books_quoting=2, units=1.0, full_kelly_percent=4.0, breakeven=400,
+    )
+    html_text = _recommended_bets_section([weak], [], "2026-08-20")
+    assert "Best Bets (0)" in html_text
+
+
 def test_reco_group_caps_visible_rows_and_defers_the_rest():
     from mlb_props.betting import RecommendedBet
     from mlb_props.html_report import _RECO_VISIBLE_CAP, _reco_group

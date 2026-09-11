@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import glob
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from odds_monitor.ev import american_to_decimal
 
-from .betting import MIN_EV_PERCENT_TO_RECOMMEND, recommend_units
+from .betting import BEST_BETS_MAX_COUNT, BEST_BETS_MIN_EV_PERCENT, MIN_EV_PERCENT_TO_RECOMMEND, recommend_units
 from .edges import effective_tier
 from .results import ClvRecord, GameOutcome, PickRecord, load_clv, load_picks, load_results
 
@@ -317,6 +317,47 @@ class UnitsRecord:
     units: float  # staked, always positive
     won: bool
     net_units: float  # +profit if won, -units if lost
+    ev_percent_model: float = 0.0
+    # True if this pick would also have made that real game_date's Best
+    # Bets slice (see betting.best_bets) - the tightest, highest-
+    # conviction subset of that day's real Strong list. A strict subset
+    # of the strong-tier rows here, never its own separate bar.
+    is_best_bet: bool = False
+
+
+def _dedupe_best_leg_per_player_per_day(
+    qualifying: List[Tuple[ResolvedPick, str, float]]
+) -> List[Tuple[ResolvedPick, str, float]]:
+    """Same player, multiple real markets recommended the same real game
+    date (1+ Hits AND 2+ Total Bases on the same player-game, say) are not
+    independent bets - both depend on the same at-bats going well, so
+    staking both compounds one correlated outcome into what looks like
+    two diversified positions. Confirmed live (2026-09-10): 21 of 42 real
+    Strong-tier players that day had 2+ correlated legs simultaneously
+    recommended; deduping to one leg per player would have roughly halved
+    that day's real tracked loss (-16.5u -> -7.9u) on the exact same
+    picks, nothing else changed. Keeps only the single highest-priority
+    leg per (game_date, player): a real cross-book "agree" leg beats a
+    model-only one even at lower EV% (the type of confirmation matters
+    more here than the raw number), then the higher EV% within the same
+    tier.
+    """
+    best: Dict[Tuple[str, str], Tuple[ResolvedPick, str, float]] = {}
+    for item in qualifying:
+        r, tier, _units = item
+        key = (r.pick.game_date, r.pick.player.strip().lower())
+        current = best.get(key)
+        if current is None:
+            best[key] = item
+            continue
+        cur_r, cur_tier, _cur_units = current
+        is_agree = tier == "agree"
+        cur_is_agree = cur_tier == "agree"
+        if is_agree and not cur_is_agree:
+            best[key] = item
+        elif is_agree == cur_is_agree and r.pick.ev_percent_model > cur_r.pick.ev_percent_model:
+            best[key] = item
+    return list(best.values())
 
 
 def units_ledger(resolved: List[ResolvedPick]) -> List[UnitsRecord]:
@@ -334,8 +375,14 @@ def units_ledger(resolved: List[ResolvedPick]) -> List[UnitsRecord]:
     fraction. A pick with no real price, below the EV bar, or with no
     positive Kelly edge is silently excluded, same as the live page - it
     was never a real bet, so it was never money won or lost.
+
+    Deduped to one leg per (game_date, player) - see
+    `_dedupe_best_leg_per_player_per_day` - so a real, disciplined
+    bettor's actual tracked performance isn't inflated (in either
+    direction) by staking multiple correlated markets on the same player
+    the same day. Real subset, same real math, just not double-counted.
     """
-    ledger = []
+    qualifying: List[Tuple[ResolvedPick, str, float]] = []
     for r in resolved:
         p = r.pick
         if p.best_price is None or p.ev_percent_model is None or p.ev_percent_model < MIN_EV_PERCENT_TO_RECOMMEND:
@@ -344,6 +391,11 @@ def units_ledger(resolved: List[ResolvedPick]) -> List[UnitsRecord]:
         units = recommend_units(p.model_prob, p.best_price, tier)
         if units is None:
             continue
+        qualifying.append((r, tier, units))
+
+    ledger = []
+    for r, tier, units in _dedupe_best_leg_per_player_per_day(qualifying):
+        p = r.pick
         net_units = units * (american_to_decimal(p.best_price) - 1.0) if r.won else -units
         ledger.append(
             UnitsRecord(
@@ -355,9 +407,36 @@ def units_ledger(resolved: List[ResolvedPick]) -> List[UnitsRecord]:
                 units=units,
                 won=r.won,
                 net_units=round(net_units, 4),
+                ev_percent_model=p.ev_percent_model,
             )
         )
-    return ledger
+    return _mark_best_bets(ledger)
+
+
+def _mark_best_bets(ledger: List[UnitsRecord]) -> List[UnitsRecord]:
+    """Flags each real game_date's own Best Bets slice within the already-
+    built ledger - the exact same rule the live site's `betting.best_bets`
+    applies to that day's Strong list: at most BEST_BETS_MAX_COUNT picks,
+    only ones clearing BEST_BETS_MIN_EV_PERCENT, ranked by EV% within that
+    one real day. Lets the Performance page show whether this tighter
+    slice is actually grinding steadier than the full list, using the
+    real tracked numbers rather than asserting it.
+    """
+    by_date: Dict[str, List[UnitsRecord]] = {}
+    for r in ledger:
+        by_date.setdefault(r.game_date, []).append(r)
+
+    marked_ids = set()
+    for rows in by_date.values():
+        candidates = sorted(
+            (r for r in rows if r.tier == "agree" and r.ev_percent_model >= BEST_BETS_MIN_EV_PERCENT),
+            key=lambda r: r.ev_percent_model,
+            reverse=True,
+        )
+        for r in candidates[:BEST_BETS_MAX_COUNT]:
+            marked_ids.add(id(r))
+
+    return [replace(r, is_best_bet=True) if id(r) in marked_ids else r for r in ledger]
 
 
 @dataclass(frozen=True)
@@ -378,6 +457,11 @@ class UnitsSummary:
     strong_net_units: float
     speculative_n_bets: int
     speculative_net_units: float
+    # Best Bets is a strict subset of Strong (see UnitsRecord.is_best_bet /
+    # betting.best_bets), never its own exclusive bucket - these units are
+    # already counted once above in strong_net_units too.
+    best_bets_n_bets: int
+    best_bets_net_units: float
 
 
 def units_summary(ledger: List[UnitsRecord]) -> UnitsSummary:
@@ -391,11 +475,14 @@ def units_summary(ledger: List[UnitsRecord]) -> UnitsSummary:
             strong_net_units=0.0,
             speculative_n_bets=0,
             speculative_net_units=0.0,
+            best_bets_n_bets=0,
+            best_bets_net_units=0.0,
         )
     total_staked = sum(r.units for r in ledger)
     net = sum(r.net_units for r in ledger)
     strong = [r for r in ledger if r.tier == "agree"]
     speculative = [r for r in ledger if r.tier != "agree"]
+    best = [r for r in ledger if r.is_best_bet]
     return UnitsSummary(
         n_bets=len(ledger),
         total_units_staked=round(total_staked, 2),
@@ -405,6 +492,8 @@ def units_summary(ledger: List[UnitsRecord]) -> UnitsSummary:
         strong_net_units=round(sum(r.net_units for r in strong), 2),
         speculative_n_bets=len(speculative),
         speculative_net_units=round(sum(r.net_units for r in speculative), 2),
+        best_bets_n_bets=len(best),
+        best_bets_net_units=round(sum(r.net_units for r in best), 2),
     )
 
 

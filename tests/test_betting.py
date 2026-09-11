@@ -7,9 +7,12 @@ recommendations. See that module's docstring for the conservatism choices
 import pytest
 
 from mlb_props.betting import (
+    BEST_BETS_MAX_COUNT,
+    BEST_BETS_MIN_EV_PERCENT,
     MAX_UNITS,
     MIN_EV_PERCENT_TO_RECOMMEND,
     MIN_UNITS,
+    best_bets,
     breakeven_price,
     build_recommended_bets,
     kelly_fraction,
@@ -181,6 +184,56 @@ def test_build_recommended_bets_combines_all_three_markets():
     hits = _agree_edge("Player I", "batter_hits")
     strong, _ = build_recommended_bets(_report(hr_edges=[hr], tb_edges=[tb], hits_edges=[hits]))
     assert {r.player for r in strong} == {"Player G", "Player H", "Player I"}
+
+
+def test_build_recommended_bets_dedupes_correlated_legs_on_the_same_player():
+    # Real finding (2026-09-10): the same player recommended in more than
+    # one market the same day isn't two independent bets - both ride on
+    # the same at-bats. Only the higher-EV% leg should survive.
+    lower_leg = _agree_edge("Player J", "batter_home_runs", ev_percent_model=8.0)
+    higher_leg = _agree_edge("Player J", "batter_total_bases", ev_percent_model=20.0)
+    strong, _ = build_recommended_bets(_report(hr_edges=[lower_leg], tb_edges=[higher_leg]))
+    assert len(strong) == 1
+    assert strong[0].market == "batter_total_bases"
+    assert strong[0].ev_percent_model == 20.0
+
+
+def test_build_recommended_bets_prefers_agree_over_model_only_for_the_same_player():
+    # A real cross-book "agree" leg beats a model-only one on the same
+    # player even at lower EV% - the confirmation matters more here than
+    # the raw number, and showing the player in both sections would still
+    # double-count the same underlying risk.
+    agree_leg = _agree_edge("Player K", "batter_hits", ev_percent_model=6.0)
+    model_only_leg = _model_only_edge("Player K", "batter_total_bases", ev_percent_model=30.0)
+    strong, speculative = build_recommended_bets(_report(hits_edges=[agree_leg], tb_edges=[model_only_leg]))
+    assert [r.market for r in strong] == ["batter_hits"]
+    assert speculative == []
+
+
+def test_best_bets_caps_at_the_real_count_and_ev_floor():
+    picks = [
+        _agree_edge(f"Player {i}", "batter_hits", ev_percent_model=ev)
+        for i, ev in enumerate([25.0, 20.0, 15.0, 12.0, 10.0, 9.0, 5.0, 3.5])
+    ]
+    strong, _ = build_recommended_bets(_report(hits_edges=picks))
+    top = best_bets(strong)
+    assert len(top) == BEST_BETS_MAX_COUNT
+    assert all(r.ev_percent_model >= BEST_BETS_MIN_EV_PERCENT for r in top)
+    assert [r.ev_percent_model for r in top] == [25.0, 20.0, 15.0, 12.0, 10.0]
+
+
+def test_best_bets_never_padded_below_the_real_ev_floor():
+    # A quiet day with only two real high-conviction picks returns two,
+    # not five padded out with weaker ones just to hit the cap.
+    picks = [
+        _agree_edge("Player L", "batter_hits", ev_percent_model=15.0),
+        _agree_edge("Player M", "batter_hits", ev_percent_model=9.0),
+        _agree_edge("Player N", "batter_hits", ev_percent_model=4.0),
+    ]
+    strong, _ = build_recommended_bets(_report(hits_edges=picks))
+    top = best_bets(strong)
+    assert len(top) == 2
+    assert [r.player for r in top] == ["Player L", "Player M"]
 
 
 # --- withdrawn_recommendations: a pick a prior run today actually

@@ -285,6 +285,15 @@ input.view-toggle:checked ~ .table-scroll .secondary-col{ display:table-cell; }
 .reco-more summary::-webkit-details-marker{ display:none; }
 .reco-more summary:hover{ text-decoration:underline; }
 .reco-more[open] summary{ border-bottom:1px solid var(--border); }
+/* Full Strong + Speculative lists, collapsed under the tight Best Bets
+   slice by default - see html_report.py's _recommended_bets_section. */
+.reco-full-lists{ margin-top:22px; }
+.reco-full-lists > summary{ cursor:pointer; list-style:none; font-size:13px; font-weight:600; color:var(--info); padding:4px 0; }
+.reco-full-lists > summary::-webkit-details-marker{ display:none; }
+.reco-full-lists > summary:hover{ text-decoration:underline; }
+.reco-full-lists[open] > summary{ margin-bottom:14px; }
+.reco-full-lists .reco-group{ margin-top:18px; }
+.reco-full-lists .reco-group:first-of-type{ margin-top:0; }
 .reco-disclosure{ font-size:12.5px; color:var(--ink-muted); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin-top:16px; }
 .reco-disclosure b{ color:var(--ink); }
 /* A pick a prior run today recommended that this run no longer does -

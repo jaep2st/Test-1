@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from .betting import MIN_EV_PERCENT_TO_RECOMMEND, RecommendedBet, WithdrawnRecommendation, build_recommended_bets
+from .betting import MIN_EV_PERCENT_TO_RECOMMEND, RecommendedBet, WithdrawnRecommendation, best_bets, build_recommended_bets
 from .edges import MIN_BOOKS_FOR_MARKET_AGREE, EdgeCandidate
 from .hot_streak import HeatIndex
 from .market import MARKET_HITS, MARKET_HOME_RUN, MARKET_TOTAL_BASES, book_display_name
@@ -602,6 +602,14 @@ def _recommended_bets_section(
     all_props_by_player: Optional[Dict[str, List[EdgeCandidate]]] = None,
     withdrawn: Optional[List[WithdrawnRecommendation]] = None,
 ) -> str:
+    top_picks = best_bets(strong)
+    best_bets_html = _reco_group(
+        f"Best Bets ({len(top_picks)})",
+        "The tightest, highest-conviction slice of Strong - fewer plays, for a steadier daily/monthly/yearly grind. Not a claim these specific picks are more likely to win, just this run's most convicted subset of an already-real bar",
+        top_picks,
+        game_date_iso,
+        all_props_by_player,
+    )
     strong_html = _reco_group(
         f"Strong plays ({len(strong)})",
         "Model + market both see real value - our fundamentals and a real cross-book consensus (2+ independent books) agree",
@@ -623,8 +631,12 @@ def _recommended_bets_section(
       <h2>Tonight's Recommended Bets</h2>
       <span class="hint">Every real +EV play that clears the bar, sized to a conservative fraction of Kelly</span>
     </div>
-    {strong_html}
-    {speculative_html}
+    {best_bets_html}
+    <details class="reco-full-lists">
+      <summary>Show the full Strong + Speculative lists ({len(strong)} + {len(speculative)})</summary>
+      {strong_html}
+      {speculative_html}
+    </details>
     {withdrawn_html}
     <div class="reco-disclosure">
       <b>How sizing works:</b> "size" is fractional Kelly - quarter-Kelly (0.25x) for Strong plays, an extra-conservative

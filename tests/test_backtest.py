@@ -305,6 +305,102 @@ def test_units_ledger_excludes_a_pick_with_no_real_price():
     assert units_ledger(resolved) == []
 
 
+def test_units_ledger_dedupes_correlated_legs_on_the_same_player_same_day():
+    # Same real player, same real game date, two different markets both
+    # clearing the bet bar - the exact 2026-09-10 correlated-double-stake
+    # pattern (see _dedupe_best_leg_per_player_per_day's docstring). Only
+    # the higher-EV% leg should end up staked, not both.
+    picks = [
+        _pick("Player A", market="batter_hits", tier="agree", books_quoting=4, ev_percent_model=10.0, game_date="2026-08-20"),
+        _pick("Player A", market="batter_total_bases", tier="agree", books_quoting=4, ev_percent_model=25.0, game_date="2026-08-20"),
+    ]
+    results = [_outcome("Player A", got_hr=True, game_date="2026-08-20")]
+    resolved = resolve_picks(picks, results)
+    ledger = units_ledger(resolved)
+
+    assert len(ledger) == 1
+    assert ledger[0].market == "batter_total_bases"
+    assert ledger[0].ev_percent_model == 25.0
+
+
+def test_units_ledger_prefers_agree_leg_over_higher_ev_model_only_leg():
+    picks = [
+        _pick("Player A", market="batter_hits", tier="agree", books_quoting=4, ev_percent_model=10.0, game_date="2026-08-20"),
+        _pick("Player A", market="batter_total_bases", tier="model_only", books_quoting=1, ev_percent_model=40.0, game_date="2026-08-20"),
+    ]
+    results = [_outcome("Player A", got_hr=True, game_date="2026-08-20")]
+    resolved = resolve_picks(picks, results)
+    ledger = units_ledger(resolved)
+
+    assert len(ledger) == 1
+    assert ledger[0].market == "batter_hits"
+    assert ledger[0].tier == "agree"
+
+
+def test_units_ledger_does_not_dedupe_the_same_player_across_different_days():
+    picks = [
+        _pick("Player A", tier="agree", books_quoting=4, game_date="2026-08-20"),
+        _pick("Player A", tier="agree", books_quoting=4, game_date="2026-08-21"),
+    ]
+    results = [
+        _outcome("Player A", got_hr=True, game_date="2026-08-20"),
+        _outcome("Player A", got_hr=True, game_date="2026-08-21"),
+    ]
+    resolved = resolve_picks(picks, results)
+    assert len(units_ledger(resolved)) == 2
+
+
+def test_units_ledger_marks_best_bets_capped_and_ev_floored_per_day():
+    # 6 real "agree" candidates clearing BEST_BETS_MIN_EV_PERCENT (8.0) on
+    # one day, plus one speculative pick that must never qualify - only the
+    # top BEST_BETS_MAX_COUNT (5) by EV% get is_best_bet=True.
+    picks = [
+        _pick(f"Player {i}", market="batter_hits", tier="agree", books_quoting=4, ev_percent_model=ev, game_date="2026-08-20")
+        for i, ev in enumerate([30.0, 25.0, 20.0, 15.0, 10.0, 9.0], start=1)
+    ]
+    picks.append(
+        _pick("Player Spec", market="batter_hits", tier="model_only", books_quoting=1, ev_percent_model=50.0, game_date="2026-08-20")
+    )
+    results = [_outcome(p.player, got_hr=True, game_date="2026-08-20") for p in picks]
+    resolved = resolve_picks(picks, results)
+    ledger = units_ledger(resolved)
+
+    best = {r.player for r in ledger if r.is_best_bet}
+    assert best == {"Player 1", "Player 2", "Player 3", "Player 4", "Player 5"}
+    assert "Player 6" not in best  # 6th-highest EV%, gets capped out at 5
+    assert "Player Spec" not in best  # speculative tier never qualifies
+
+
+def test_units_ledger_best_bets_excludes_agree_picks_below_the_real_ev_floor():
+    picks = [
+        _pick("Player Strong", market="batter_hits", tier="agree", books_quoting=4, ev_percent_model=10.0, game_date="2026-08-20"),
+        _pick("Player Weak", market="batter_hits", tier="agree", books_quoting=4, ev_percent_model=5.0, game_date="2026-08-20"),
+    ]
+    results = [_outcome(p.player, got_hr=True, game_date="2026-08-20") for p in picks]
+    resolved = resolve_picks(picks, results)
+    ledger = units_ledger(resolved)
+
+    best = {r.player for r in ledger if r.is_best_bet}
+    assert best == {"Player Strong"}  # Player Weak clears MIN_EV_PERCENT_TO_RECOMMEND but not BEST_BETS_MIN_EV_PERCENT
+
+
+def test_units_summary_reports_best_bets_as_a_subset_of_strong():
+    picks = [
+        _pick("Player A", tier="agree", books_quoting=4, ev_percent_model=25.0, best_price=200, model_prob=0.40, game_date="2026-08-20"),
+        _pick("Player B", tier="agree", books_quoting=4, ev_percent_model=5.0, best_price=200, model_prob=0.40, game_date="2026-08-20"),
+    ]
+    results = [
+        _outcome("Player A", got_hr=True, game_date="2026-08-20"),
+        _outcome("Player B", got_hr=False, game_date="2026-08-20"),
+    ]
+    resolved = resolve_picks(picks, results)
+    summary = units_summary(units_ledger(resolved))
+
+    assert summary.strong_n_bets == 2
+    assert summary.best_bets_n_bets == 1  # only Player A clears the 8.0 EV% Best Bets floor
+    assert summary.best_bets_net_units == 5.0
+
+
 def test_units_summary_splits_strong_vs_speculative_and_computes_roi():
     picks = [
         _pick("Player A", model_prob=0.40, best_price=200, tier="agree", books_quoting=4, game_date="2026-08-20"),
