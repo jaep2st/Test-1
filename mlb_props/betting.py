@@ -220,12 +220,71 @@ def build_recommended_bets(report: SlateReport) -> Tuple[List[RecommendedBet], L
     already excluded (no market data, negative EV, below the real-edge
     bar) never appears in either list - this is a strict subset of what
     the ranked prop tables already show, not a new source of picks.
+
+    Deduped to one leg per player across the whole board first: the same
+    player recommended in more than one market the same day (1+ Hits AND
+    2+ Total Bases, say) isn't two independent bets - both ride on the
+    same at-bats, so staking both compounds one correlated outcome into
+    what looks like real diversification. Confirmed live (2026-09-10): 21
+    of 42 real Strong-tier players that day had 2+ correlated legs
+    recommended at once; deduping to one leg per player would have
+    roughly halved that day's real tracked loss on the exact same picks
+    (see backtest.py's matching dedup for the units-tracking side of
+    this fix). Keeps the single highest-priority leg per player: a real
+    cross-book "agree" leg beats a model-only one on the same player even
+    at lower EV% (the confirmation matters more than the number here),
+    then the higher EV% within the same tier.
     """
     candidates = [c for edges in (report.hr_edges, report.tb_edges, report.hits_edges) for c in edges]
     recs = [r for r in (_to_recommendation(c) for c in candidates) if r is not None]
-    strong = sorted((r for r in recs if r.tier == "agree"), key=lambda r: r.ev_percent_model, reverse=True)
-    speculative = sorted((r for r in recs if r.tier != "agree"), key=lambda r: r.ev_percent_model, reverse=True)
+
+    best_by_player: Dict[str, RecommendedBet] = {}
+    for r in recs:
+        key = r.player.strip().lower()
+        current = best_by_player.get(key)
+        if current is None:
+            best_by_player[key] = r
+            continue
+        is_agree = r.tier == "agree"
+        cur_is_agree = current.tier == "agree"
+        if is_agree and not cur_is_agree:
+            best_by_player[key] = r
+        elif is_agree == cur_is_agree and r.ev_percent_model > current.ev_percent_model:
+            best_by_player[key] = r
+    deduped = list(best_by_player.values())
+
+    strong = sorted((r for r in deduped if r.tier == "agree"), key=lambda r: r.ev_percent_model, reverse=True)
+    speculative = sorted((r for r in deduped if r.tier != "agree"), key=lambda r: r.ev_percent_model, reverse=True)
     return strong, speculative
+
+
+# A real ask: too many recommended picks makes the day-to-day units swing
+# hard to grind through even when the underlying picks are individually
+# fine (see units_ledger's docstring on correlated same-player legs for
+# half of that swing - this is the other half: even after dedup, a full
+# Strong list on a busy slate can be 40+ real bets, a lot of simultaneous
+# variance). Best bets is a further, tighter slice of an already-deduped
+# Strong list for someone who wants fewer, higher-conviction plays to
+# track a steadier daily/monthly/yearly number - not a claim these
+# specific bets are more likely to win (see backtest.edge_confidence:
+# neither tier has a statistically proven edge yet at this project's
+# current sample size), only that they're this run's most convicted
+# subset of an already-real bar.
+BEST_BETS_MAX_COUNT = 5
+BEST_BETS_MIN_EV_PERCENT = 8.0
+
+
+def best_bets(strong: List[RecommendedBet]) -> List[RecommendedBet]:
+    """The tightest real subset of `strong` (already deduped to one leg
+    per player, already sorted by EV% descending - see
+    `build_recommended_bets`): at most BEST_BETS_MAX_COUNT picks, and
+    only ones clearing BEST_BETS_MIN_EV_PERCENT - a real bar well above
+    the noise-level MIN_EV_PERCENT_TO_RECOMMEND every Strong pick already
+    clears. A quiet day with nothing that convicted honestly returns
+    fewer than the cap, never padded out with a weaker pick to hit a
+    round number.
+    """
+    return [r for r in strong if r.ev_percent_model >= BEST_BETS_MIN_EV_PERCENT][:BEST_BETS_MAX_COUNT]
 
 
 @dataclass(frozen=True)
